@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  qms-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: qms-cloud:latest
+    container_name: qms_queue_system
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - PORT=8501
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      # Mount persistent sqlite database so bookings persist across container recreation
+      - ./app/qms.db:/app/app/qms.db
+      - ./reports:/app/reports
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

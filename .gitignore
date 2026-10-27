@@ -1,0 +1,32 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.venv_backup/
+venv/
+env/
+.pytest_cache/
+
+# ---- Secrets / config ----
+.env
+
+# ---- Generated artifacts (kept out of version control) ----
+models/*.pkl
+models/*.joblib
+data/processed/*
+!data/processed/.gitkeep
+reports/figures/*
+!reports/figures/.gitkeep
+reports/metrics/*
+!reports/metrics/.gitkeep
+app/qms.db*
+
+# ---- OS / IDE ----
+.DS_Store
+.idea/
+.vscode/
+.ipynb_checkpoints/

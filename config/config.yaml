@@ -1,0 +1,75 @@
+# =====================================================================
+# Multi-Objective AI-Driven Cloud-Based Queue Management System (QMS)
+# Central configuration. All paths are relative to the project root.
+# =====================================================================
+
+project_name: "Multi-Objective AI-Driven Cloud-Based Queue Management System"
+seed: 42
+
+data:
+  raw_csv: "data/raw/hospital_dataset_preprocessed.csv"
+  processed_dir: "data/processed"
+  clean_csv: "data/processed/clean.csv"
+  profile_json: "data/processed/data_profile.json"
+  date_col: "appointment_date"
+  test_size: 0.20          # time-based holdout (latest 20% of appointments)
+
+models:
+  dir: "models"
+  no_show:
+    threshold: 0.20          # fallback if validation search is skipped
+    min_recall: 0.25         # prefer catching no-shows over a 0.5 default
+  waiting_time: {}
+  arrival_delay: {}
+  service_time: {}
+
+reports:
+  metrics_dir: "reports/metrics"
+  figures_dir: "reports/figures"
+
+# ---- Multi-objective scheduler -------------------------------------
+# Weights are normalised internally; tune these to trade objectives off.
+scheduler:
+  objective_weights:
+    waiting: 0.40          # minimise average waiting time
+    utilization: 0.20      # maximise doctor (server) utilisation
+    fairness: 0.20         # keep waiting times equitable (no starvation)
+    emergency: 0.20        # keep emergency (priority) waits low
+  emergency_priority_level: 1
+
+# ---- Dynamic, crowd-aware buffer / controlled overbooking ----------
+# Buffer is NOT a static clinic-wide gap. At packing and live re-allocation
+# time it is recomputed from: base reserve × (1 − mean no-show risk),
+# predicted wait pad, today's service overrun, and crowd compression
+# (more people waiting → smaller gaps so the queue clears faster).
+buffer:
+  base_minutes: 10               # default reserved buffer per slot (before dynamics)
+  max_overbook_fraction: 0.30    # never overbook a slot by more than 30%
+  min_minutes: 1.0               # never shrink inter-slot gap below this
+  max_minutes: 20.0              # never inflate inter-slot gap above this
+  crowd_compress_per_waiter: 0.75  # minutes removed from buffer per waiting patient
+  crowd_compress_cap: 6.0        # max total shrink from crowd pressure
+  behind_compress_per_min: 0.05  # extra shrink per minute the day is running late
+
+# ---- Doctor roster / slot generation -------------------------------
+# Slots are generated from each doctor's shift start/end using the predicted
+# service duration (ML, else department history) plus a dynamic buffer.
+# slot_minutes / buffer_minutes on a doctor are *fallbacks* only.
+roster:
+  default_slot_minutes: 15       # fallback if service-time model/history missing
+  default_buffer_minutes: 5      # fallback inter-slot buffer
+  default_shift_start: "09:00"
+  default_shift_end: "13:00"
+  min_service_minutes: 5
+  max_service_minutes: 90
+
+# ---- Generative-AI explanation layer -------------------------------
+# API key is read from the GEMINI_API_KEY environment variable.
+# If unavailable, the system falls back to a deterministic template explainer.
+genai:
+  model: "gemini-2.0-flash"
+  max_output_tokens: 400
+
+app:
+  db_path: "app/qms.db"
+  departments_source: "data"     # populate booking form choices from the dataset

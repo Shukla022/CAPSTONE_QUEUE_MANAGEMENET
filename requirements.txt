@@ -1,0 +1,20 @@
+# Core scientific stack
+pandas>=1.5
+numpy>=1.23
+matplotlib>=3.6
+seaborn>=0.12
+PyYAML>=6.0
+
+# Machine learning (primary). The model layer auto-falls back to a
+# built-in NumPy implementation if scikit-learn is not installed,
+# but scikit-learn is strongly recommended for best accuracy.
+scikit-learn>=1.2
+joblib>=1.2
+
+# Web application (cloud-deployable dashboard + booking UI)
+streamlit>=1.28
+
+# Generative-AI explanation layer (OPTIONAL).
+# Without this package (or without GEMINI_API_KEY) the system uses a
+# deterministic offline template explainer, so nothing breaks.
+google-generativeai>=0.5 ; python_version >= "3.9"
