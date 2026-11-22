@@ -165,18 +165,20 @@ def _dashboard(user=None):
     counts = store.counts_by_status(db, date=target_date_iso)
 
     # Metrics row
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
         st.metric("Active Doctors", len(active_and_available),
                   help=f"Doctors on duty today (Total roster: {len(all_doctors)})")
     with c2:
         st.metric("Registered Patients", len(patients))
     with c3:
-        st.metric(f"Appointments ({sel_date_formatted})", len(appointments))
+        st.metric(f"Total Appointments", len(appointments))
     with c4:
-        st.metric("Checked In", counts.get("checked_in", 0))
+        st.metric("Checked In", counts.get("checked_in", 0), help="Waiting in queue")
     with c5:
-        st.metric("Completed", counts.get("done", 0))
+        st.metric("In Consultation", counts.get("in_service", 0), help="Currently seeing doctor")
+    with c6:
+        st.metric("Completed", counts.get("done", 0), help="Consultations completed")
 
     st.divider()
 
@@ -185,7 +187,7 @@ def _dashboard(user=None):
     status_order = ["booked", "checked_in", "in_service", "done", "no_show", "cancelled"]
     rows = [
         {
-            "Status": "Completed" if k == "done" else k.replace("_", " ").title(),
+            "Status": "Completed" if k == "done" else "In Consultation" if k == "in_service" else k.replace("_", " ").title(),
             "Count": counts.get(k, 0),
         }
         for k in status_order if k in counts
@@ -233,30 +235,37 @@ def _dashboard(user=None):
         st.info("Selected doctor is not on duty on this date.")
     else:
         lifecycle_display = {
-            "booked": "Booked",
-            "checked_in": "Checked In",
-            "in_service": "In Service",
-            "done": "Completed",
-            "no_show": "No Show",
-            "cancelled": "Cancelled",
+            "booked": "📅 Booked",
+            "checked_in": "✅ Checked In",
+            "in_service": "🩺 In Consultation",
+            "done": "✔️ Completed",
+            "no_show": "⚠️ No Show",
+            "cancelled": "❌ Cancelled",
         }
 
         for doc in doctors_to_show:
             doc_appts = store.list_bookings(db, doctor_id=doc["id"], date=sel_date_iso)
             patient_count = len(doc_appts)
             patient_label = f"{patient_count} {'Patient' if patient_count == 1 else 'Patients'}"
-            expander_title = f"👨‍⚕️ {doc['name']} — {doc['department']} — {patient_label}"
+            active_p = next((a for a in doc_appts if a.get("status") == "in_service"), None)
+            active_tag = f" — 🩺 Seeing: {active_p['patient_name']}" if active_p else ""
+            expander_title = f"👨‍⚕️ {doc['name']} — {doc['department']} — {patient_label}{active_tag}"
 
-            with st.expander(expander_title, expanded=(patient_count > 0)):
+            with st.expander(expander_title, expanded=(patient_count > 0 or bool(active_p))):
                 dc1, dc2, dc3 = st.columns(3)
                 with dc1:
                     st.markdown(f"**Doctor:** {doc['name']}")
                     st.markdown(f"**Department:** {doc['department']}")
                 with dc2:
                     st.markdown(f"**Shift:** {doc['shift_start']} – {doc['shift_end']}")
-                    st.markdown("**Status:** 🟢 On Duty")
+                    st.markdown("**Duty Status:** 🟢 On Duty")
                 with dc3:
                     st.markdown(f"**Patients Today:** {patient_count}")
+                    if active_p:
+                        st.markdown(f"**Current Patient:** 🩺 {active_p['patient_name']}")
+
+                if active_p:
+                    st.info(f"🩺 **Active Consultation in Progress:** {active_p['patient_name']} (Department: {doc['department']})")
 
                 if patient_count == 0:
                     st.info("No patients assigned yet today.")

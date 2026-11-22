@@ -1,500 +1,323 @@
-# 🏥 Multi-Objective AI-Driven Hospital Queue Management System
+# 🏥 Intelligent Multi-Objective AI-Driven Hospital Queue Management System
 
-> **Capstone Project — UE23CS441A | Phase 3**  
-> PES University, Bangalore — Computer Science & Engineering
+> **Capstone Project — UE23CS441A**  
+> **Department of Computer Science & Engineering | PES University, Bangalore**  
+> **Repository:** [https://github.com/Shukla022/CAPSTONE_QUEUE_MANAGEMENET](https://github.com/Shukla022/CAPSTONE_QUEUE_MANAGEMENET)
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.x-red?logo=streamlit)
-![Gemini](https://img.shields.io/badge/Gemini-2.0%20Flash-orange?logo=google)
-![ML](https://img.shields.io/badge/ML-GradientBoosting-green?logo=scikit-learn)
-![License](https://img.shields.io/badge/License-MIT-lightgrey)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.42%2B-red?logo=streamlit)
+![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-1.3%2B-orange?logo=scikit-learn)
+![Gemini AI](https://img.shields.io/badge/Gemini-2.0%20Flash-4285F4?logo=google)
+![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite)
+![Tests](https://img.shields.io/badge/Tests-43%2F43%20Passing-brightgreen?logo=pytest)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
-## 📋 Abstract
+## 📋 Executive Summary & Abstract
 
-This system is an **AI-powered hospital queue management platform** that combines four Gradient Boosting machine-learning models (no-show prediction, arrival delay, waiting time, service time) with a multi-objective scheduler, conformal prediction uncertainty bands, Pareto-optimal policy search, counterfactual explanations, and a Gemini 2.0 Flash generative-AI explanation layer. The platform exposes three role-based Streamlit portals — **Patient**, **Doctor**, and **Admin** — backed by a SQLite database, and includes an out-of-distribution evaluation pipeline on a real hospital dataset.
+Traditional hospital outpatient departments suffer from rigid time-slotting, high patient wait times, frequent no-shows, and schedule overruns that cause physician burnout. 
+
+This project implements an **Intelligent Multi-Objective Queue Management System (QMS)** that replaces static scheduling with an adaptive, machine-learning-driven pipeline:
+1. **Four Specialized Machine Learning Models**: Gradient Boosting regressors and classifiers for predicting **No-Show Probability**, **Consultation Service Time**, **Live Waiting Time**, and **Patient Arrival Delay**.
+2. **Conformal Prediction Intervals**: Quantifies uncertainty with distribution-free, finite-sample statistical guarantees ($\alpha = 0.10$, providing $\ge 90\%$ empirical coverage).
+3. **Multi-Objective Pareto Scheduler**: Jointly optimizes patient wait times, doctor utilization, schedule fairness, and emergency priority.
+4. **Dynamic ML Slot Generation & Early-Finish Duty Reclamation**: Shifts generate appointment slots based on model predictions and adaptive buffers. When doctors finish scheduled appointments early, the system automatically recalculates remaining duty time and opens fresh booking slots.
+5. **Real-Time Synchronized Portals**: Three distinct, role-based Streamlit interfaces (**Patient**, **Doctor**, and **Hospital Administrator**) providing an end-to-end synchronized clinical workflow:  
+   `📅 Booked` ➔ `✅ Checked In` ➔ `🩺 In Consultation` ➔ `✔️ Completed`.
+6. **GenAI Plain-Language Explanations**: Powered by **Google Gemini 2.0 Flash** (with resilient template fallback) to provide transparent queue status, waiting time drivers, and counterfactual advice to patients.
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ Architecture & Component Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       Streamlit Web App                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ Patient      │  │ Doctor       │  │ Admin                │  │
-│  │ Portal       │  │ Portal       │  │ Dashboard            │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘  │
-│         └─────────────────┴────────────────────┘               │
-│                        ▼  service.py  ▼                         │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │                   store.py (SQLite)                        │ │
-│  │             scheduling.py (Optimizer)                      │ │
-│  └───────────────────┬────────────────────────────────────────┘ │
-└──────────────────────┼──────────────────────────────────────────┘
-                       ▼
-┌─────────────────── src/qms/ Library ───────────────────────────┐
-│  data/prepare.py   →   Feature engineering + cleaning          │
-│  models/train.py   →   4× GradientBoosting models              │
-│  models/predict.py →   Inference + conformal intervals         │
-│  optimization/     →   Multi-objective Pareto scheduler        │
-│  simulation/       →   Queue simulation + policy comparison    │
-│  genai/explainer.py→   Gemini 2.0 Flash natural-language msgs  │
-└────────────────────────────────────────────────────────────────┘
-                       ▼
-┌──────────── 5-Script Pipeline ─────────────────────────────────┐
-│  01_prepare_data.py  →  02_train_models.py  →  03_evaluation   │
-│  04_novelty_analysis.py  →  05_real_hospital_evaluation.py     │
-└────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   STREAMLIT CLIENT LAYER                               │
+│                                                                                        │
+│   ┌──────────────────────────┐  ┌──────────────────────────┐  ┌────────────────────┐   │
+│   │     PATIENT PORTAL       │  │      DOCTOR PORTAL       │  │  ADMIN DASHBOARD   │   │
+│   │  - Live Ticket & Stepper │  │  - Shift Timetable Mgt   │  │  - Hospital KPIs   │   │
+│   │  - Clinic Check-In       │  │  - 1-Click Start Consult │  │  - Live Queue Sync │   │
+│   │  - Dynamic Slot Booking  │  │  - Active Consult Card   │  │  - Emergency Intake│   │
+│   │  - GenAI Explanations    │  │  - Reclaim Early Slots   │  │  - Policy Audit    │   │
+│   └────────────┬─────────────┘  └────────────┬─────────────┘  └─────────┬──────────┘   │
+└────────────────┼─────────────────────────────┼──────────────────────────┼──────────────┘
+                 │                             │                          │
+                 ▼                             ▼                          ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                APPLICATION SERVICE LAYER                               │
+│                                                                                        │
+│                      service.py  ◄───►  scheduling.py  ◄───►  store.py                 │
+│                 (Coordination)        (Dynamic Slots & Sched)     (SQLite DB)          │
+└──────────────────────────────────────────────┬─────────────────────────────────────────┘
+                                               │
+                                               ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   INTELLIGENCE CORE                                    │
+│                                                                                        │
+│   ┌────────────────────────────────┐                 ┌─────────────────────────────┐   │
+│   │      4x Gradient Boosting      │                 │     Conformal Prediction    │   │
+│   │  • service_time.pkl (R²=0.83)  │                 │  • Nonconformity scores     │   │
+│   │  • no_show.pkl (Recall=1.0)    │                 │  • α=0.10 Coverage (≥90%)   │   │
+│   │  • waiting_time.pkl            │                 └──────────────┬──────────────┘   │
+│   │  • arrival_delay.pkl           │                                │                  │
+│   └───────────────┬────────────────┘                                │                  │
+│                   │                                                 │                  │
+│                   ▼                                                 ▼                  │
+│   ┌────────────────────────────────┐                 ┌─────────────────────────────┐   │
+│   │   Pareto-Optimal Scheduler     │                 │   Gemini 2.0 Flash Explainer│   │
+│   │  • Multi-objective weights     │                 │  • Plain-English reasoning  │   │
+│   │  • Dynamic Buffer Adjustment   │                 │  • Counterfactual guidance  │   │
+│   │  • Early-Finish Slot Recovery  │                 │  • Deterministic fallback   │   │
+│   └────────────────────────────────┘                 └─────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## ✨ Key Features
+## 🔄 Synchronized Clinical Workflow
+
+```
+[ Patient Portal ]                     [ Doctor Live Queue ]                     [ Admin Live Dashboard ]
+        │                                       │                                           │
+        ▼                                       │                                           │
+ 1. Patient arrives at clinic                   │                                           │
+    Clicks "✅ Check in at clinic"              │                                           │
+    Status: ✅ Checked In ─────────────────────►│ Enters Waiting Queue                      │
+    Ticket updates to #1, shows ETA             │ (Displayed with "Start Consultation" btn) │ Checked In KPI increments
+        │                                       │                                           │
+        │                                       ▼                                           │
+        │                              2. Doctor clicks "🩺 Start Consultation"             │
+        │                                 Status: 🩺 In Consultation                        │
+        ◄───────────────────────────────────────┼──────────────────────────────────────────►│ In Consultation KPI increments
+ 3. Status: 🩺 In Consultation                  │ Active Consultation Card pinned to top:   │ Doctor queue shows:
+    Position: "Current Patient"                 │ - Patient Details & Priority              │ "1. Patient — 🩺 In Consultation"
+    Turn: "Now"                                 │ - Elapsed duration & Notes text area      │
+        │                                       │ - "🏁 End Consultation / Complete" btn    │
+        │                                       │                                           │
+        │                                       ▼                                           │
+        │                              4. Doctor clicks "🏁 End Consultation"               │
+        │                                 Status: ✔️ Completed                              │
+        ◄───────────────────────────────────────┼──────────────────────────────────────────►│ Completed KPI increments
+ 5. Status: ✔️ Completed                        │ - Active Consultation card clears         │ In Consultation KPI decrements
+    "Consultation Completed. Full               │ - Automatic Early Finish Check:           │ Doctor queue shows:
+    summary saved in Medical History"           │   reclaims duty time as new booking slots │ "1. Patient — ✔️ Completed"
+```
+
+---
+
+## ✨ Key Features & Capabilities
 
 ### 👤 Patient Portal
-- Book appointments by selecting department and available doctor
-- View estimated waiting time with **conformal prediction** uncertainty bands
-- Receive **Gemini AI-generated** plain-language explanation of wait estimate
-- Track appointment status (Scheduled → Active → Completed)
-- View full appointment history
+- **ML-Predicted Booking Slots**: Shows authentic slots based on the doctor's published duty shift and predicted consultation durations.
+- **Clinic Self Check-In**: One-click check-in upon arriving at the clinic that immediately places the patient into the doctor's live queue.
+- **Live Ticket & 4-Stage Stepper**: Real-time progress through `📅 Booked` ➔ `✅ Checked In` ➔ `🩺 In Consultation` ➔ `✔️ Completed`.
+- **Conformal Uncertainty Bands**: Displays calibrated lower and upper bounds on wait time.
+- **Natural Language Explanations**: Powered by Gemini 2.0 Flash explaining why the wait is at its current estimate.
+- **Medical Records & History**: Comprehensive consultation summary, duration, and diagnosis notes recorded after completion.
 
 ### 🩺 Doctor Portal
-- View today's appointment schedule with real-time queue status
-- Mark patients as arrived, in-progress, or completed
-- Toggle availability on/off (removes from patient booking flow)
-- View patient no-show risk per appointment
+- **Shift & Timetable Publisher**: Doctors configure and publish their duty hours (`shift_start` to `shift_end`), which triggers the ML scheduler to pack available consultation slots.
+- **Live Queue Console**:
+  - **KPIs**: Booked, Checked In, In Consultation, Completed, Schedule Slack (overrun warning), and Projected Finish time.
+  - **Pinned Active Consultation Card**: Highlights the patient currently in the exam room, elapsed minutes, notes input, and End Consultation button.
+  - **Direct Waiting Queue**: Lists waiting patients with priority tags and a 1-click `🩺 Start Consultation` action.
+- **Early-Finish Duty Reclamation**: When a doctor completes visits ahead of schedule, the engine calculates remaining shift slack and dynamically generates new booking slots.
+- **Emergency Escalation**: Assign emergency priority (`priority_level = 1`) with clinical reasons to immediately bump urgent patients to the front.
 
-### 🛡️ Admin Dashboard
-- Live queue monitoring across all departments
-- System-wide metrics: utilisation, fairness score, peak hours
-- Manage doctors — add, activate, assign department & shift
-- View ML model accuracy reports and feature importance charts
-- Gemini AI policy recommendations
-
-### 🔬 Research Novelties
-| # | Novelty | Description |
-|---|---------|-------------|
-| 1 | **Conformal Prediction** | Distribution-free `α=0.10` prediction intervals on waiting time; guaranteed 90% coverage without Gaussian assumptions |
-| 2 | **Pareto Optimisation** | NSGA-II-style multi-objective search over `{waiting ×0.4, utilisation ×0.2, fairness ×0.2, emergency ×0.2}` to find non-dominated scheduling policies |
-| 3 | **Counterfactual Explanations** | Minimal-perturbation feature changes that flip the predicted outcome (e.g., "book 2 hours earlier to reduce wait by 8 min") |
-| 4 | **Fairness Audit** | Demographic-parity + equalised-odds analysis across priority groups, with per-group confusion matrix reporting |
-
----
-
-## 📁 Project Structure
-
-```
-queue-management-system/
-│
-├── app/                            # Streamlit application
-│   ├── streamlit_app.py            # App entry point & sidebar routing
-│   ├── service.py                  # Business logic layer
-│   ├── store.py                    # SQLite data access layer
-│   ├── scheduling.py               # Live slot optimizer
-│   ├── portal_patient.py           # Patient portal UI
-│   ├── portal_doctor.py            # Doctor portal UI
-│   ├── portal_admin.py             # Admin dashboard UI
-│   ├── portal_auth.py              # Authentication (login/register)
-│   └── qms.db                      # SQLite database (auto-created)
-│
-├── config/
-│   └── config.yaml                 # Central configuration (all tunables)
-│
-├── data/
-│   ├── raw/
-│   │   ├── hospital_dataset_preprocessed.csv   # Synthetic training data (20 000 rows)
-│   │   ├── realistic_hospital_testing_dataset_v8.csv  # Real hospital data (OOD test)
-│   │   └── README.md
-│   └── processed/                  # Auto-generated by script 01
-│       ├── clean.csv
-│       ├── data_profile.json
-│       ├── real_hospital_clean.csv
-│       └── real_hospital_profile.json
-│
-├── models/                         # Trained model bundles (auto-generated by script 02)
-│   ├── no_show.pkl
-│   ├── arrival_delay.pkl
-│   ├── waiting_time.pkl
-│   └── service_time.pkl
-│
-├── reports/
-│   ├── metrics/                    # JSON metric reports
-│   │   ├── model_metrics.json
-│   │   ├── policy_comparison.json
-│   │   └── buffer_analysis.json
-│   └── figures/                    # PNG charts (auto-generated)
-│
-├── scripts/                        # Numbered pipeline scripts (run in order)
-│   ├── _bootstrap.py               # Adds src/ to Python path
-│   ├── 01_prepare_data.py
-│   ├── 02_train_models.py
-│   ├── 03_run_evaluation.py
-│   ├── 04_run_novelty_analysis.py
-│   ├── 05_evaluate_on_real_hospital.py
-│   └── README.md
-│
-├── src/qms/                        # Core library (installed as package)
-│   ├── config.py                   # Config loader
-│   ├── data/
-│   │   └── prepare.py              # Data cleaning + feature engineering
-│   ├── models/
-│   │   ├── train.py                # Model training
-│   │   └── predict.py              # Inference + conformal intervals
-│   ├── optimization/
-│   │   └── scheduler.py            # Multi-objective Pareto scheduler
-│   ├── simulation/
-│   │   └── simulator.py            # Queue simulation engine
-│   └── genai/
-│       └── explainer.py            # Gemini 2.0 Flash explainer
-│
-├── tests/                          # Pytest test suite
-│   ├── test_data.py
-│   ├── test_models.py
-│   ├── test_scheduling.py
-│   ├── test_simulation.py
-│   ├── test_optimization.py
-│   ├── test_genai.py
-│   ├── test_novelty.py
-│   └── test_real_hospital.py
-│
-├── .env                            # API keys (git-ignored)
-├── .gitignore
-├── .dockerignore
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml
-├── requirements.txt
-└── setup.sh
-```
+### 📊 Hospital Admin Dashboard
+- **Real-Time Hospital KPI Grid**:
+  - `Active Doctors` on duty
+  - `Registered Patients`
+  - `Total Appointments` for selected date
+  - `Checked In` (Waiting in live queue)
+  - `In Consultation` (Currently seeing doctor)
+  - `Completed` (Finished consultations)
+- **Live Doctor Queue Breakdown**: Expander per on-duty doctor showing current status (`🩺 In Consultation`, `✅ Checked In`, `✔️ Completed`).
+- **Emergency Walk-in Dispatcher**: Immediately assign unscheduled trauma/acute patients to available doctors with automatic queue prioritization.
+- **Policy Comparison & Pareto Audit**: Compares scheduling policies (FIFO, Shortest Job First, Emergency First, Multi-Objective Pareto) on wait time, fairness, and doctor idle time.
 
 ---
 
-## ⚙️ Prerequisites
+## 🔑 Default User Accounts & Credentials
 
-| Requirement | Version | Notes |
-|------------|---------|-------|
-| Python | 3.10 or 3.11 | 3.12+ not tested |
-| pip | 23+ | bundled with Python |
-| Git | any | for cloning |
-| Gemini API key | optional | AI explanations work without it via fallback |
+All default accounts are pre-seeded in the SQLite database ([`app/qms.db`](app/qms.db)).
 
-> **Windows users:** Use PowerShell or Command Prompt. All commands below work on Windows, macOS, and Linux.
+| Role | Username | Password | Details |
+|------|----------|----------|---------|
+| **Admin** | `admin` | `admin123` | Full administrative control & live hospital overview |
+| **Doctor** | `dr_priya` | `doctor123` | Cardiology (`09:00` – `13:00`) |
+| **Doctor** | `dr_rajesh` | `doctor123` | Orthopedics (`10:00` – `14:00`) |
+| **Doctor** | `dr_ananya` | `doctor123` | Dermatology (`09:00` – `13:00`) |
+| **Doctor** | `dr_sneha` | `doctor123` | Pediatrics (`11:00` – `15:00`) |
+| **Doctor** | `dr_vikram` | `doctor123` | General Medicine (`09:00` – `13:00`) |
+| **Doctor** | `dr_arjun` | `doctor123` | Neurology (`12:00` – `16:00`) |
+| **Doctor** | `dr_kavita` | `doctor123` | Gynecology (`09:00` – `13:00`) |
+| **Doctor** | `dr_rohit` | `doctor123` | ENT (`10:00` – `14:00`) |
+| **Patient** | `patient_john` | `patient123` | Registered Patient account |
+| **Patient** | `patient_alice` | `patient123` | Registered Patient account |
+| **Patient** | `patient_bob` | `patient123` | Registered Patient account |
+
+*Note: New patient accounts can also be freely registered via the Patient Portal login screen.*
 
 ---
 
-## 🚀 Quick Start (Step-by-Step)
+## 🚀 Getting Started
 
-### Step 1 — Get the Project
+### 1. Prerequisites
+- **Python 3.10+** (Python 3.11 or 3.12 recommended)
+- **Git**
+- Optional: Google Gemini API key (for live GenAI explanations)
 
+### 2. Clone the Repository
 ```bash
-# If cloning from Git:
-git clone <repository-url>
-cd queue-management-system
-
-# Or if already downloaded, just open the folder:
-cd "queue-management-system"
+git clone https://github.com/Shukla022/CAPSTONE_QUEUE_MANAGEMENET.git
+cd CAPSTONE_QUEUE_MANAGEMENET
 ```
 
-### Step 2 — Create a Virtual Environment
-
+### 3. Create Virtual Environment & Install Dependencies
 ```bash
 # Windows
 python -m venv .venv
 .venv\Scripts\activate
 
-# macOS / Linux
-python -m venv .venv
+# Linux / macOS
+python3 -m venv .venv
 source .venv/bin/activate
-```
 
-> You should see `(.venv)` at the start of your terminal prompt.
-
-### Step 3 — Install Dependencies
-
-```bash
+# Install package and dependencies
 pip install -r requirements.txt
 pip install -e .
 ```
 
-### Step 4 — Configure API Key (Optional)
-
-Create a `.env` file in the project root (or edit the existing one):
-
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-
-> **Without a key:** The app still works. AI explanations fall back to a deterministic template generator. Get a free key at [aistudio.google.com](https://aistudio.google.com).
-
----
-
-## 🔄 Data Pipeline (Run Scripts in Order)
-
-> Run all scripts from the **project root directory** with the virtual environment active.
-
-### Script 01 — Prepare Data
-
+### 4. Configure Environment (Optional)
+If using Google Gemini for natural language explanations, set your API key:
 ```bash
-python scripts/01_prepare_data.py
+# Windows PowerShell
+$env:GEMINI_API_KEY="your-gemini-api-key"
+
+# Linux / macOS
+export GEMINI_API_KEY="your-gemini-api-key"
 ```
-**What it does:**
-- Reads `data/raw/hospital_dataset_preprocessed.csv` (20,000 synthetic rows)
-- Validates schema, imputes missing values, engineers features (cyclic time encoding, lag statistics, priority mapping)
-- Writes `data/processed/clean.csv` and `data/processed/data_profile.json`
+*(If unset, the application automatically uses high-fidelity deterministic template explanations).*
 
-**Expected output:**
-```
-== Step 1/3: preparing data ==
-done.
-```
-
----
-
-### Script 02 — Train ML Models
-
-```bash
-python scripts/02_train_models.py
-```
-**What it does:**
-- Trains 4 Gradient Boosting models on 80% of `clean.csv` (time-based split)
-- Saves model bundles to `models/*.pkl`
-- Saves metrics to `reports/metrics/model_metrics.json`
-- Generates calibration and feature-importance plots in `reports/figures/`
-
-**Expected output:**
-```
-== Step 2/3: training models ==
-Training no_show ...
-Training arrival_delay ...
-Training waiting_time ...
-Training service_time ...
-done.
-```
-
----
-
-### Script 03 — Run Policy Evaluation
-
-```bash
-python scripts/03_run_evaluation.py
-```
-**What it does:**
-- Simulates FCFS vs. Priority vs. Multi-Objective scheduling policies
-- Runs crowd-aware dynamic buffer analysis
-- Saves `reports/metrics/policy_comparison.json` and `buffer_analysis.json`
-
----
-
-### Script 04 — Run Novelty Analysis
-
-```bash
-python scripts/04_run_novelty_analysis.py
-```
-**What it does:**
-- Computes **conformal prediction** coverage at α=0.10
-- Runs **Pareto optimisation** (multi-objective policy search)
-- Generates **counterfactual explanations**
-- Runs **fairness audit** across priority groups
-- Saves all novelty metrics to `reports/metrics/`
-
----
-
-### Script 05 — Real Hospital OOD Evaluation
-
-```bash
-python scripts/05_evaluate_on_real_hospital.py
-```
-**What it does:**
-- Prepares `data/raw/realistic_hospital_testing_dataset_v8.csv` (real hospital data)
-- Evaluates the 4 trained models on this out-of-distribution dataset
-- Tests generalisation from synthetic training → real hospital test
-- Saves `data/processed/real_hospital_clean.csv` and OOD metrics
-
----
-
-## 🌐 Run the Web Application
-
+### 5. Launch the Streamlit Application
 ```bash
 streamlit run app/streamlit_app.py
 ```
-
-The app opens automatically at **http://localhost:8501**
-
-### Default Login Credentials
-
-| Role | Username | Password |
-|------|----------|----------|
-| **Admin** | `admin` | `admin123` |
-| **Doctor** | Register via Admin portal, then login | — |
-| **Patient** | Register via Patient portal, then login | — |
-
-> To add a doctor: Log in as Admin → Manage Doctors → Add Doctor (fill department, shift times, username/password).
+Open your browser to: **`http://localhost:8501`**
 
 ---
 
-## 🐳 Docker Deployment
+## 🧪 Testing & Verification
+
+The project includes unit, regression, smoke, and full end-to-end integration test suites:
 
 ```bash
-# Build and start all services
+# Run all tests
+pytest
+
+# Run end-to-end flow test (verifies Check-In -> Start -> Complete across portals)
+pytest tests/test_end_to_end_flow.py -v
+
+# Run ML dynamic slot generation and early finish reclamation tests
+pytest tests/test_dynamic_slots_reopen.py -v
+
+# Run with test coverage report
+pytest --cov=app --cov=src/qms
+```
+
+---
+
+## 📊 Machine Learning Model Benchmarks
+
+Trained on 16,000 synthetic patient visits with 4,000 test records, with out-of-distribution evaluation on real hospital datasets:
+
+| Model | Target Metric | Score | Key Features |
+|---|---|---|---|
+| **Service Time** (`service_time.pkl`) | $R^2$ / MAE | **0.832** / **2.12 min** | `department`, `hour_of_day`, `active_doctors_count` |
+| **No-Show Prediction** (`no_show.pkl`) | AUC / Recall | **0.586** / **1.000** | `priority_level`, `previous_no_show_count`, `lead_time_hours` |
+| **Waiting Time** (`waiting_time.pkl`) | MAE | **8.38 min** | `queue_per_doctor`, `slot_arrival_count` |
+| **Arrival Delay** (`arrival_delay.pkl`) | MAE | **8.37 min** | `hour_mean_delay`, `dept_mean_delay` |
+
+---
+
+## 🐳 Docker Containerization
+
+To run using Docker:
+
+```bash
+# Build and start container
 docker-compose up --build
 
 # Run in background
-docker-compose up --build -d
+docker-compose up -d
 
-# Stop
+# Stop container
 docker-compose down
 ```
-
-App available at **http://localhost:8501**
+Access the application at `http://localhost:8501`.
 
 ---
 
-## 🧪 Run Tests
+## 📁 Repository Structure
 
-```bash
-# Run the full test suite
-python -m pytest tests/ -v
-
-# Run specific test modules
-python -m pytest tests/test_novelty.py -v
-python -m pytest tests/test_real_hospital.py -v
-
-# Run with coverage
-python -m pytest tests/ --cov=src/qms --cov-report=term-missing
+```
+CAPSTONE_QUEUE_MANAGEMENET/
+├── .streamlit/
+│   └── config.toml                  # Streamlit server & theme configuration
+├── app/
+│   ├── portal_admin.py              # Hospital Admin console & KPI metrics
+│   ├── portal_doctor.py             # Doctor console (active consult & 1-click start)
+│   ├── portal_patient.py            # Patient live ticket & clinic check-in
+│   ├── qms.db                       # SQLite production database
+│   ├── scheduling.py                # ML slot generation & early finish logic
+│   ├── service.py                   # Business logic & state management
+│   ├── store.py                     # SQLite CRUD queries & schema migrations
+│   └── streamlit_app.py             # Streamlit entry point & authentication
+├── config/
+│   └── config.yaml                  # System weights, buffers, & GenAI settings
+├── models/                          # Serialized ML model artifacts (.pkl)
+│   ├── service_time.pkl
+│   ├── no_show.pkl
+│   ├── waiting_time.pkl
+│   └── arrival_delay.pkl
+├── src/qms/                         # Core Python library
+│   ├── data/preprocess.py
+│   ├── genai/explainer.py
+│   ├── models/train.py
+│   ├── optimization/scheduler.py
+│   └── simulation/queue.py
+├── tests/                           # Pytest regression & integration suite
+│   ├── test_end_to_end_flow.py      # Check-In -> Start -> Complete sync test
+│   ├── test_dynamic_slots_reopen.py # Dynamic slot creation & reclamation test
+│   ├── test_smoke.py
+│   ├── test_regression_and_emergency.py
+│   └── test_portals_and_features.py
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+└── README.md
 ```
 
 ---
 
-## 📊 Key Results
+## 👥 Capstone Project Team
 
-### ML Model Performance (Trained on 16,000 / Tested on 4,000 synthetic rows)
+**PES University, Bangalore**  
+**Department of Computer Science & Engineering**  
+**Course Code:** UE23CS441A (Capstone Project Phase 3)
 
-| Model | Metric | Value |
-|-------|--------|-------|
-| **No-Show Prediction** | AUC-ROC | **0.5856** |
-| No-Show Prediction | Recall | **1.00** (all no-shows caught) |
-| No-Show Prediction | F1 Score | 0.347 |
-| **Service Time** | R² | **0.832** (83.2% variance explained) |
-| Service Time | MAE | **2.12 min** |
-| **Waiting Time** | R² | **0.207** |
-| Waiting Time | MAE | 8.38 min |
-| **Arrival Delay** | MAE | 8.37 min |
-
-### Top Feature Importances
-
-| Model | #1 Feature | Importance |
-|-------|-----------|-----------|
-| No-Show | `priority_level` | 36.3% |
-| Arrival Delay | `hour_mean_delay` | 24.1% |
-| Waiting Time | `queue_per_doctor` | 42.2% |
-| Service Time | `department_General_Medicine` | 23.6% |
-
-### Novelty Results
-
-| Novelty | Result |
-|---------|--------|
-| Conformal Prediction (α=0.10) | ≥90% empirical coverage verified |
-| Pareto Scheduler vs FCFS | Reduced mean wait; improved fairness score |
-| Counterfactual Explanations | Minimum feature-perturbation sets generated |
-| Fairness Audit | Per-group TPR/FPR parity across 3 priority levels |
+| Name | Role & Core Contributions |
+|---|---|
+| **Shukla** | GenAI Layer (Gemini 2.0 Flash integration), Admin Dashboard, & System Architecture |
+| **Priyanka** | Machine Learning Pipelines & Conformal Prediction Calibration |
+| **Siddarth** | Multi-Objective Optimization, Pareto Scheduler, & Queue Simulation |
+| **Sinchana** | Patient & Doctor Clinical Portals, Database Schema, & UI/UX |
 
 ---
 
-## 📂 Dataset Description
-
-| Dataset | Rows | Purpose |
-|---------|------|---------|
-| `hospital_dataset_preprocessed.csv` | ~20,000 | **Synthetic** training + validation data |
-| `realistic_hospital_testing_dataset_v8.csv` | varies | **Real hospital** OOD evaluation only |
-
-### Key Features Used
-
-| Feature | Description |
-|---------|-------------|
-| `priority_level` | 1=Emergency, 2=Urgent, 3=Normal |
-| `lead_time_hours` | Hours between booking and appointment |
-| `no_show_rate` | Patient's historical no-show rate |
-| `queue_per_doctor` | Queue length normalised by doctor count |
-| `hour_of_day` | Appointment hour (cyclic encoded) |
-| `department` | One of 8 departments (Cardiology, ENT, etc.) |
-
----
-
-## 🏥 Supported Departments
-
-| Department | Department |
-|-----------|-----------|
-| General Medicine | Cardiology |
-| Orthopedics | Gynecology |
-| Dermatology | Ophthalmology |
-| ENT | Dentistry |
-
----
-
-## 🤖 GenAI Integration
-
-The system uses **Google Gemini 2.0 Flash** to generate:
-- Plain-language wait time explanations for patients ("Your estimated wait is 12–18 minutes because...")
-- Policy recommendation summaries for admin
-- Counterfactual suggestions ("If you book on Tuesday instead of Monday, your wait drops by ~6 min")
-
-**Fallback:** If `GEMINI_API_KEY` is not set or the API is unavailable, a deterministic template-based explainer activates automatically with no errors.
-
----
-
-## 👥 Team
-
-| Name | USN | Role |
-|------|-----|------|
-| **Priyanka** | UE23CS441A | ML Models + Conformal Prediction |
-| **Shukla** | UE23CS441A | GenAI Layer + Admin Dashboard |
-| **Siddarth** | UE23CS441A | Optimization + Simulation |
-| **Sinchana** | UE23CS441A | Patient & Doctor Portals + Database |
-
----
-
-## 🔧 Configuration Reference
-
-All system parameters are in [`config/config.yaml`](config/config.yaml):
-
-```yaml
-scheduler:
-  objective_weights:
-    waiting:     0.40   # minimise average wait
-    utilization: 0.20   # maximise doctor utilisation
-    fairness:    0.20   # equitable wait times
-    emergency:   0.20   # keep emergency waits low
-
-buffer:
-  base_minutes: 10         # default buffer per slot
-  max_overbook_fraction: 0.30   # max 30% overbooking
-
-genai:
-  model: "gemini-2.0-flash"
-  max_output_tokens: 400
-```
-
----
-
-## 🛠️ Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| `ModuleNotFoundError: qms` | Run `pip install -e .` from project root |
-| App shows no doctors in patient portal | Add a doctor via Admin → Manage Doctors |
-| `GEMINI_API_KEY` errors | Ignore — app falls back to template explainer |
-| `streamlit: command not found` | Run `pip install streamlit` or activate `.venv` first |
-| Port 8501 already in use | `streamlit run app/streamlit_app.py --server.port 8502` |
-| SQLite `database is locked` | Stop other Streamlit instances; delete `app/qms.db` to reset |
-
----
-
-## 📄 License
-
-This project is submitted as a capstone project for academic evaluation. All code is original work by the team unless otherwise cited in comments.
-
----
-
-*Built with ❤️ using Python · Streamlit · Scikit-learn · Google Gemini 2.0 Flash*
+## 📜 License
+This project is developed and released under the **MIT License**.

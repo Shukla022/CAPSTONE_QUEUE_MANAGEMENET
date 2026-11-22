@@ -190,20 +190,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     now_ts = datetime.now().isoformat(timespec="seconds")
 
-    # Keep existing booked dates bookable so historical appointments stay valid
-    appt_dates = conn.execute(
-        "SELECT DISTINCT doctor_id, appointment_date FROM appointments WHERE doctor_id IS NOT NULL"
-    ).fetchall()
-    for r in appt_dates:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO doctor_availability
-                (doctor_id, available_date, is_available, published_by, created_at, updated_at)
-            VALUES (?, ?, 1, 'system', ?, ?)
-            """,
-            [r["doctor_id"], r["appointment_date"], now_ts, now_ts],
-        )
-
 
 def init_db(db_path: str | Path) -> None:
     with get_conn(db_path) as conn:
@@ -582,11 +568,15 @@ def is_doctor_available(db_path: str | Path, doctor_id: int, available_date: str
             return False
 
         r = conn.execute(
-            "SELECT is_available FROM doctor_availability WHERE doctor_id = ? AND available_date = ?",
+            """SELECT is_available, published_by, shift_start, shift_end 
+               FROM doctor_availability 
+               WHERE doctor_id = ? AND available_date = ?""",
             [doctor_id, available_date],
         ).fetchone()
         # Strictly doctor-published: slots only exist if the doctor chose to publish duty for this date
         if r is None:
+            return False
+        if r["published_by"] == "system" or not r["shift_start"] or not r["shift_end"]:
             return False
         return bool(r["is_available"])
 
@@ -638,7 +628,11 @@ def list_doctor_published_dates(db_path: str | Path, *,
             d.name AS doctor_name, d.department
         FROM doctor_availability da
         JOIN doctors d ON d.id = da.doctor_id
-        WHERE d.active = 1 AND da.is_available = 1
+        WHERE d.active = 1 
+          AND da.is_available = 1
+          AND (da.published_by IS NULL OR da.published_by != 'system')
+          AND da.shift_start IS NOT NULL 
+          AND da.shift_end IS NOT NULL
     """
     args: List = []
     if doctor_id is not None:
@@ -666,14 +660,17 @@ def list_available_doctors(db_path: str | Path, *,
     q = """
         SELECT 
             d.id, d.name, d.department,
-            COALESCE(da.shift_start, d.shift_start, '09:00') AS shift_start,
-            COALESCE(da.shift_end, d.shift_end, '17:00') AS shift_end,
+            da.shift_start AS shift_start,
+            da.shift_end AS shift_end,
             d.slot_minutes, d.buffer_minutes, d.active, d.created_at
         FROM doctors d
         JOIN doctor_availability da 
           ON da.doctor_id = d.id AND da.available_date = ?
         WHERE d.active = 1
           AND da.is_available = 1
+          AND (da.published_by IS NULL OR da.published_by != 'system')
+          AND da.shift_start IS NOT NULL
+          AND da.shift_end IS NOT NULL
     """
     args = [available_date]
     if department:
@@ -737,7 +734,7 @@ def check_booking_conflict(db_path: str | Path, doctor_id: int,
         q = """
             SELECT id, slot_start, slot_end, status FROM appointments
             WHERE doctor_id = ? AND appointment_date = ?
-              AND status IN ('booked', 'checked_in', 'in_service', 'done')
+              AND status IN ('booked', 'checked_in', 'in_service')
         """
         args = [doctor_id, appointment_date]
         if exclude_id is not None:
@@ -1159,4 +1156,23 @@ def seed_default_users_and_doctors(db_path: str | Path) -> None:
             "email": "alice.smith@example.com",
             "phone": "+1-555-0102",
         })
+
+    # Ensure authentic clinical doctors have published duty for today and upcoming 7 days
+    from datetime import date as _dt_date, timedelta as _dt_timedelta
+    _today = _dt_date.today()
+    for d in authentic_docs:
+        docs = list_doctors(db_path, department=d["department"])
+        if docs:
+            doc_rec = docs[0]
+            today_iso = _today.isoformat()
+            if not is_doctor_available(db_path, doc_rec["id"], today_iso):
+                for offset in range(8):
+                    day_str = (_today + _dt_timedelta(days=offset)).isoformat()
+                    publish_doctor_duty(
+                        db_path, doc_rec["id"], day_str,
+                        is_available=True,
+                        shift_start=doc_rec.get("shift_start") or d["shift_start"],
+                        shift_end=doc_rec.get("shift_end") or d["shift_end"],
+                        published_by="doctor"
+                    )
 

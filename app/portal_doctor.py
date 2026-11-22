@@ -33,7 +33,14 @@ def _status_badge(status):
 
 
 def _live_queue(user, doctor):
-    st.subheader("📋 Live Queue Console")
+    from datetime import datetime as _dt
+    col_t1, col_t2 = st.columns([4, 1])
+    with col_t1:
+        st.subheader("📋 Live Queue Console")
+        st.caption(f"🔴 Live — synced at {_dt.now().strftime('%H:%M:%S')}")
+    with col_t2:
+        if st.button("🔄 Refresh", key="doctor_live_queue_refresh_top", use_container_width=True):
+            st.rerun()
 
     today = date.today().isoformat()
 
@@ -124,6 +131,110 @@ def _live_queue(user, doctor):
         )
 
     st.divider()
+
+    # -----------------------------------------------------------------------
+    # 🩺 Dedicated Section 1: Active Consultation (Patient currently in_service)
+    # -----------------------------------------------------------------------
+    in_service_items = [item for item in timeline if item.get("status") == "in_service"]
+    if in_service_items:
+        st.markdown("### 🩺 Active Consultation in Progress")
+        for active_p in in_service_items:
+            b_id = active_p.get("id")
+            p_name = active_p.get("patient_name", "Patient")
+            is_em = active_p.get("priority_level", 0) >= 1
+
+            with st.container(border=True):
+                st.markdown(
+                    f"#### 🩺 Current Patient: {'🚨 EMERGENCY · ' if is_em else ''}**{p_name}**"
+                )
+                ac1, ac2, ac3 = st.columns(3)
+                with ac1:
+                    st.write("**Planned Slot:**", scheduling.format_clock_12h(active_p.get("planned_start") or active_p.get("slot_start", "—")))
+                    st.write("**Department:**", doctor.get("department", "Clinic"))
+                with ac2:
+                    st.write("**Status:**", "🩺 In Consultation")
+                    st.write("**Queue Turn:**", "Current Patient (Now)")
+                with ac3:
+                    st.write("**Priority:**", "🚨 Emergency Priority" if is_em else "Routine")
+                    st.write("**Doctor:**", doctor.get("name", "Doctor"))
+
+                st.markdown("##### Clinical Notes & Complete Consultation")
+                dur_col, notes_col = st.columns([1, 2])
+                with dur_col:
+                    act_dur = st.number_input(
+                        "Actual duration (minutes)",
+                        min_value=1.0,
+                        max_value=180.0,
+                        value=15.0,
+                        step=1.0,
+                        key=f"act_duration_{b_id}",
+                    )
+                with notes_col:
+                    act_notes = st.text_input(
+                        "Clinical notes / prescription",
+                        placeholder="e.g. Prescribed medication, routine follow up in 2 weeks",
+                        key=f"act_notes_{b_id}",
+                    )
+
+                if st.button("🏁 End Consultation / Complete", key=f"btn_end_service_{b_id}", type="primary", use_container_width=True):
+                    try:
+                        result = service.doctor_complete_service(
+                            user,
+                            b_id,
+                            service_minutes=act_dur,
+                            notes=act_notes,
+                        )
+                        n_new = int(result.get("new_open_slots") or 0)
+                        saved = float(result.get("time_saved_min") or 0.0)
+                        buf = float(result.get("suggested_buffer_min") or 0.0)
+                        msg = f"Consultation with {p_name} completed successfully."
+                        if result.get("finishing_early") and n_new > 0:
+                            msg += (
+                                f" Early finish reclaimed {n_new} new ML slot(s) "
+                                f"from remaining duty time (≈{saved:.0f} min saved; dynamic buffer {buf:.1f} min)."
+                            )
+                        elif n_new > 0:
+                            msg += f" {n_new} open slot(s) remain in today's duty window."
+                        st.success(msg)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Failed to complete consultation: {exc}")
+        st.divider()
+
+    # -----------------------------------------------------------------------
+    # ⏳ Dedicated Section 2: Waiting Patients (Checked In & Ready for Doctor)
+    # -----------------------------------------------------------------------
+    waiting_items = [item for item in timeline if item.get("status") == "checked_in"]
+    if waiting_items:
+        st.markdown("### ⏳ Waiting Queue (Checked In)")
+        st.caption("Patients who have checked in at the clinic. Click **🩺 Start Consultation** to call and begin consulting that particular patient.")
+        for w_item in waiting_items:
+            w_id = w_item.get("id")
+            w_name = w_item.get("patient_name", "Patient")
+            w_pos = w_item.get("queue_position", f"#{w_item.get('queue_pos_num', 1)}")
+            w_wait = w_item.get("est_wait_min", 0.0)
+            is_em = w_item.get("priority_level", 0) >= 1
+
+            with st.container(border=True):
+                w_col1, w_col2 = st.columns([3, 1])
+                with w_col1:
+                    prio_prefix = "🚨 **EMERGENCY** · " if is_em else ""
+                    st.markdown(f"#### {w_pos}: {prio_prefix}**{w_name}**")
+                    st.write(
+                        f"Est. Wait: **{float(w_wait):.0f} min** · "
+                        f"Est. Turn: **{w_item.get('est_turn', '—')}** · "
+                        f"Planned Slot: {scheduling.format_clock_12h(w_item.get('planned_start') or w_item.get('slot_start', '—'))}"
+                    )
+                with w_col2:
+                    st.write("")
+                    if st.button("🩺 Start Consultation", key=f"quick_start_{w_id}", type="primary", use_container_width=True):
+                        try:
+                            service.doctor_start_service(user, w_id)
+                            st.success(f"Consultation started for {w_name}.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(str(exc))
+        st.divider()
 
     st.markdown("### 📋 Current Live Queue")
 

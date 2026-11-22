@@ -39,30 +39,46 @@ def test_case_a_future_booked_appointment(tmp_path=None, monkeypatch=None):
         db = service.db_path()
 
     # Ensure controlled test state: booking 19 is a future booked appointment for patient 25
-    store.update_booking(db, 19, status="booked", check_in_time=None)
+    created_for_test = False
+    if not store.get_booking(db, 19):
+        created_for_test = True
+        with store.get_conn(db) as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO appointments (
+                    id, patient_name, patient_user_id, department, doctor_id,
+                    appointment_date, slot_start, slot_end, status, created_at
+                ) VALUES (19, 'risha', 25, 'Dermatology', 20, '2026-10-04', '10:00', '10:12', 'booked', '2026-10-03T18:02:37')
+            """)
+    else:
+        store.update_booking(db, 19, status="booked", check_in_time=None)
     store.update_doctor(db, 20, shift_start="10:00", shift_end="14:00")
 
-    # Test on controlled database record (booking id 19, patient_user_id 25)
-    ticket = service.get_patient_live_ticket(25, booking_id=19)
-    assert ticket is not None, "Patient 25 ticket should exist"
-    assert ticket["id"] == 19
-    assert ticket["status"] == "booked"
-    assert ticket["appointment_date"] == "2026-10-04"
-    assert ticket["slot_start_12h"] == "10:00 AM"
+    try:
+        # Test on controlled database record (booking id 19, patient_user_id 25)
+        ticket = service.get_patient_live_ticket(25, booking_id=19)
+        assert ticket is not None, "Patient 25 ticket should exist"
+        assert ticket["id"] == 19
+        assert ticket["status"] == "booked"
+        assert ticket["appointment_date"] == "2026-10-04"
+        assert ticket["slot_start_12h"] == "10:00 AM"
 
-    # Strict user requirements:
-    # 1. Do NOT treat patient as part of live waiting queue
-    assert ticket["is_live_queue"] is False, "Future booked appointment must not be in live queue"
-    # 2. Do NOT show Queue Position #1
-    assert ticket["queue_position"] == "Available after check-in"
-    assert ticket["queue_position_display"] == "Available after check-in"
-    assert ticket["queue_pos_num"] is None
-    # 3. Do NOT show Live ETA = 0 min
-    assert ticket["live_eta_minutes"] is None
-    assert ticket["live_eta_display"] == "Available after check-in"
-    # 4. Estimated turn must be the scheduled slot time
-    assert ticket["estimated_turn"] == "10:00 AM"
-    assert ticket["estimated_turn_display"] == "10:00 AM"
+        # Strict user requirements:
+        # 1. Do NOT treat patient as part of live waiting queue
+        assert ticket["is_live_queue"] is False, "Future booked appointment must not be in live queue"
+        # 2. Do NOT show Queue Position #1
+        assert ticket["queue_position"] == "Available after check-in"
+        assert ticket["queue_position_display"] == "Available after check-in"
+        assert ticket["queue_pos_num"] is None
+        # 3. Do NOT show Live ETA = 0 min
+        assert ticket["live_eta_minutes"] is None
+        assert ticket["live_eta_display"] == "Available after check-in"
+        # 4. Estimated turn must be the scheduled slot time
+        assert ticket["estimated_turn"] == "10:00 AM"
+        assert ticket["estimated_turn_display"] == "10:00 AM"
+    finally:
+        if created_for_test:
+            with store.get_conn(db) as conn:
+                conn.execute("DELETE FROM appointments WHERE id = 19")
     # 5. Doctor shift displayed
     assert ticket["doctor_shift"] == "10:00 AM - 2:00 PM"
     assert ticket["appointment_date_human"] == "October 4, 2026"

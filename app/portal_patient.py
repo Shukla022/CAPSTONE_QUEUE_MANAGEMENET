@@ -70,6 +70,9 @@ def _status_stepper(status):
 def _live_ticket(user):
     st.header("🎫 Live Queue Ticket")
 
+    if "patient_booking_success_msg" in st.session_state:
+        st.success(st.session_state.pop("patient_booking_success_msg"))
+
     # Real-time auto-refresh controls
     from datetime import datetime
     col_rt1, col_rt2, col_rt3 = st.columns([3, 2, 2])
@@ -165,7 +168,33 @@ def _live_ticket(user):
         with col4:
             st.metric("Department", _safe_value(ticket.get("doctor_department")))
 
-        st.info("📌 You have a scheduled appointment. You are not currently waiting in the live queue. Please check in when you arrive at the clinic.")
+        if is_past_appt:
+            st.warning(
+                "⚠️ This appointment has expired. Check-in is no longer available. "
+                "Please book a new appointment."
+            )
+        else:
+            is_shift_ended = "Shift Concluded" in str(ticket.get("estimated_turn", ""))
+            if is_shift_ended:
+                st.warning(
+                    f"⚠️ The doctor's shift for this appointment has concluded ({ticket.get('doctor_shift')}). "
+                    "Check-in is closed for today."
+                )
+            else:
+                st.info("📌 You have a scheduled appointment. Please check in when you arrive at the clinic:")
+                if st.button(
+                    "✅ Check in at clinic",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"primary_check_in_btn_{ticket['id']}",
+                ):
+                    try:
+                        service.patient_check_in(user, ticket["id"])
+                        st.success("You are checked in and have entered the live queue!")
+                        st.session_state["selected_patient_booking_id"] = ticket["id"]
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Check-in failed: {exc}")
 
     elif status == "checked_in":
         # In-app emergency notifications for waiting patients (Part C4)
@@ -214,7 +243,8 @@ def _live_ticket(user):
         with col4:
             st.metric("Department", _safe_value(ticket.get("doctor_department")))
 
-        st.info("🩺 Your consultation is currently in progress.")
+        doc_name = ticket.get('doctor_name', 'your doctor')
+        st.success(f"🩺 **You are currently in consultation with Dr. {doc_name}!** Please enter the consultation room.")
 
     elif status == "done":
         col1, col2, col3, col4 = st.columns(4)
@@ -227,7 +257,8 @@ def _live_ticket(user):
         with col4:
             st.metric("Department", _safe_value(ticket.get("doctor_department")))
 
-        st.success("✔️ This consultation has been completed. Full records are available in Medical History.")
+        doc_name = ticket.get('doctor_name', 'the doctor')
+        st.success(f"✔️ **Consultation Completed!** Your consultation with Dr. {doc_name} has concluded. Records are stored in Medical History.")
 
     elif status in ("no_show", "cancelled"):
         col1, col2, col3, col4 = st.columns(4)
@@ -362,20 +393,56 @@ def _booking_tab(user):
 
     form_ver = st.session_state.get("patient_booking_form_version", 0)
 
+    # Look up all open published schedules from today onwards
+    all_open_duties = service.list_doctor_published_dates(from_date=date.today().isoformat())
+
+    selected_quick_duty = None
+    if all_open_duties:
+        with st.expander("🩺 Quick-Select an Open Doctor Shift", expanded=True):
+            st.caption("Doctors have published duty hours for the following upcoming dates:")
+            quick_labels = ["-- Browse manually by department / date --"] + [
+                f"{d['doctor_name']} ({d['department']}) — {scheduling.format_date_human(d['available_date'])} ({d.get('shift_start', '09:00')} to {d.get('shift_end', '17:00')})"
+                for d in all_open_duties
+            ]
+            q_idx = st.selectbox(
+                "Available Schedules",
+                range(len(quick_labels)),
+                format_func=lambda i: quick_labels[i],
+                key=f"patient_quick_duty_picker_v{form_ver}",
+            )
+            if q_idx > 0:
+                selected_quick_duty = all_open_duties[q_idx - 1]
+
     departments = service.specialty_departments()
 
-    department = st.selectbox(
-        "Department",
-        departments,
-        key=f"patient_booking_department_v{form_ver}",
-    )
+    # Determine smart defaults
+    default_dept = departments[0]
+    default_date = date.today()
 
-    appointment_date = st.date_input(
-        "Appointment date",
-        min_value=date.today(),
-        value=date.today() + timedelta(days=1),
-        key=f"patient_booking_date_v{form_ver}",
-    )
+    if selected_quick_duty:
+        default_dept = selected_quick_duty["department"]
+        default_date = date.fromisoformat(selected_quick_duty["available_date"])
+    elif all_open_duties:
+        default_dept = all_open_duties[0]["department"]
+        default_date = date.fromisoformat(all_open_duties[0]["available_date"])
+
+    dept_index = departments.index(default_dept) if default_dept in departments else 0
+
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        department = st.selectbox(
+            "Department",
+            departments,
+            index=dept_index,
+            key=f"patient_booking_department_v{form_ver}",
+        )
+    with col_d2:
+        appointment_date = st.date_input(
+            "Appointment date",
+            min_value=date.today(),
+            value=default_date if default_date >= date.today() else date.today(),
+            key=f"patient_booking_date_v{form_ver}",
+        )
     date_iso = appointment_date.isoformat()
 
     # Only doctors who published duty hours for this date are bookable
@@ -386,8 +453,8 @@ def _booking_tab(user):
 
     if not doctors:
         st.warning(
-            f"No doctor has published duty hours for {department} on {scheduling.format_date_human(date_iso)} yet. "
-            "Slots open after the doctor sets their shift for the day."
+            f"No doctor has published duty hours for **{department}** on **{scheduling.format_date_human(date_iso)}** yet. "
+            "Slots open after the doctor sets their shift for the day in the Doctor Portal."
         )
         # Check if other dates have published duty for this department
         try:
@@ -395,9 +462,19 @@ def _booking_tab(user):
                 department=department, from_date=date.today().isoformat()
             )
             if open_records:
-                unique_dates = sorted({r["available_date"] for r in open_records})
-                date_list_str = ", ".join(scheduling.format_date_human(d) for d in unique_dates[:5])
-                st.info(f"💡 Open dates with published doctor duty in **{department}**: {date_list_str}")
+                st.info(f"💡 Other open dates with published doctor shifts in **{department}**:")
+                cols = st.columns(min(len(open_records), 3))
+                for idx, r in enumerate(open_records[:3]):
+                    with cols[idx]:
+                        d_str = r["available_date"]
+                        if st.button(
+                            f"📅 Switch to {scheduling.format_date_human(d_str)} ({r.get('shift_start')}–{r.get('shift_end')})",
+                            key=f"switch_d_{d_str}_{idx}_v{form_ver}",
+                        ):
+                            st.session_state[f"patient_booking_date_v{form_ver}"] = date.fromisoformat(d_str)
+                            st.rerun()
+            elif all_open_duties:
+                st.info("💡 Other departments with open doctor duty: " + ", ".join(sorted({d['department'] for d in all_open_duties})))
         except Exception:
             pass
         return
@@ -442,7 +519,8 @@ def _booking_tab(user):
         shift_e = doctor.get("shift_end", "17:00")
         now_m = service._now_min() if date_iso == date.today().isoformat() else None
         existing_bookings = store.list_bookings(service.db_path(), doctor_id=doctor["id"], date=date_iso)
-        active_bookings = [b for b in existing_bookings if b.get("status") not in ("cancelled", "no_show")]
+        active_bookings = [b for b in existing_bookings if b.get("status") in ("booked", "checked_in", "in_service")]
+        done_bookings = [b for b in existing_bookings if b.get("status") == "done"]
 
         if date_iso == date.today().isoformat():
             shift_end_m = scheduling.to_min(shift_e) or 1020
@@ -453,12 +531,19 @@ def _booking_tab(user):
                 )
             elif active_bookings:
                 st.warning(
-                    f"All {len(active_bookings)} slots for today's shift ({shift_s} – {shift_e}) are currently booked by other patients. "
-                    "Please select tomorrow or another upcoming date."
+                    f"All capacity ({len(active_bookings)} active appointments) for today's shift ({shift_s} – {shift_e}) is currently booked. "
+                    "If consultations finish early, new slots will automatically open."
+                )
+            elif done_bookings:
+                st.info(
+                    f"Dr. {doctor.get('name')} has completed all consultations for today. "
+                    f"Remaining shift time ({shift_s} – {shift_e}) is below the minimum consultation duration. "
+                    "Please select tomorrow or an upcoming date."
                 )
             else:
+                curr_clock = scheduling.to_hhmm_12h(now_m) if now_m is not None else ""
                 st.warning(
-                    f"No further slots remain within the remaining duty hours today ({shift_s} – {shift_e}). "
+                    f"All scheduled slot times within today's shift ({shift_s} – {shift_e}) have already passed (current time: {curr_clock}). "
                     "Please select tomorrow or an upcoming date to view available ML-generated slots."
                 )
         else:
@@ -473,6 +558,17 @@ def _booking_tab(user):
                     "The shift hours may be too short for a full consultation."
                 )
         return
+
+    # If doctor finished all previous slots early today, celebrate that new slots are now open
+    if date_iso == date.today().isoformat():
+        existing_bookings = store.list_bookings(service.db_path(), doctor_id=doctor["id"], date=date_iso)
+        active_bookings = [b for b in existing_bookings if b.get("status") in ("booked", "checked_in", "in_service")]
+        done_bookings = [b for b in existing_bookings if b.get("status") == "done"]
+        if done_bookings and not active_bookings:
+            st.success(
+                f"🎉 **Dr. {doctor.get('name')} completed all consultations early!** "
+                f"{len(slots)} new booking slot(s) have been automatically created and opened for today's remaining shift."
+            )
 
     def slot_label(slot):
         start = slot.get("slot_start") or slot.get("start")

@@ -634,8 +634,8 @@ def available_slots(doctor: Dict, date_iso: str) -> List[Dict]:
     """Open slots packed from the service-time model inside published duty hours.
 
     Slots are generated from the ML service duration model and dynamic crowd buffer.
-    Already-booked intervals and elapsed times (for today) are excluded.
-    Early finishes on the current day dynamically reclaim and open extra slots.
+    Already-booked active intervals and elapsed times (for today) are excluded.
+    When a doctor finishes all slots and duty time remains, new slots are automatically opened.
     """
     from datetime import date as _date
     if not has_service_model():
@@ -650,10 +650,41 @@ def available_slots(doctor: Dict, date_iso: str) -> List[Dict]:
     duration_fn, buffer_fn, _ = _slot_fns(doctor, date_iso)
     profile = dept_duration_profile(doctor.get("department"))
 
-    # Generate the complete shift timetable according to ML model predictions
-    planned = preview_shift_plan(doctor, date_iso)
+    shift_s_min = scheduling.to_min(doctor.get("shift_start")) or 540.0
+    shift_e_min = scheduling.to_min(doctor.get("shift_end")) or 1020.0
+
+    bookings = store.list_bookings(db_path(), doctor_id=doctor["id"], date=date_iso)
+    active_bookings = [b for b in bookings if b.get("status") in ("booked", "checked_in", "in_service")]
+    done_bookings = [b for b in bookings if b.get("status") == "done"]
 
     valid_slots: List[Dict] = []
+
+    # If doctor has finished all scheduled slots early and duty time remains today:
+    # Automatically generate new slots in the remaining duty window using ML prediction.
+    if is_today and bookings and not active_bookings and done_bookings:
+        from_min = max(shift_s_min, now if now is not None else shift_s_min)
+        if shift_e_min > from_min + 5.0:
+            reopened = scheduling.generate_shift_slots(
+                doctor.get("shift_start"), doctor.get("shift_end"),
+                duration_fn=duration_fn, buffer_fn=buffer_fn,
+                from_min=from_min, occupied=[], origin="reclaimed"
+            )
+            for rs in reopened:
+                rs_start = rs.get("slot_start") or rs.get("start")
+                rs_end = rs.get("slot_end") or rs.get("end")
+                rsm = scheduling.to_min(rs_start)
+                rem = scheduling.to_min(rs_end)
+                if rsm is None or rem is None or rem <= rsm:
+                    continue
+                if now is not None and rsm < now - 1.0:
+                    continue
+                if store.check_booking_conflict(db_path(), doctor["id"], date_iso, rs_start, rs_end):
+                    continue
+                rs.setdefault("buffer_minutes", buffer_fn(rsm))
+                valid_slots.append(rs)
+
+    # Standard planned timetable from ML model
+    planned = preview_shift_plan(doctor, date_iso)
     for s in planned:
         s_start = s.get("slot_start") or s.get("start")
         s_end = s.get("slot_end") or s.get("end")
@@ -664,14 +695,16 @@ def available_slots(doctor: Dict, date_iso: str) -> List[Dict]:
         # For today's date, do not offer slots that have already started in the past
         if is_today and now is not None and sm < now - 1.0:
             continue
-        # Omit slots already booked
+        # Omit slots already booked with active patients
         if store.check_booking_conflict(db_path(), doctor["id"], date_iso, s_start, s_end):
+            continue
+        # Avoid duplicate slot intervals
+        if any(max(sm, scheduling.to_min(o.get("slot_start") or o.get("start"))) < min(em, scheduling.to_min(o.get("slot_end") or o.get("end"))) - 1e-6 for o in valid_slots):
             continue
         s.setdefault("buffer_minutes", buffer_fn(sm))
         valid_slots.append(s)
 
     # Reclaimed slots from early finishes on the current day
-    bookings = store.list_bookings(db_path(), doctor_id=doctor["id"], date=date_iso)
     if is_today and bookings:
         ls = scheduling.live_schedule(
             doctor, bookings, now_min=now,

@@ -395,11 +395,17 @@ def live_schedule(doctor: Dict, bookings: Sequence[Dict],
         planned = planned if planned is not None else cursor
         actual = b.get("service_minutes")
         actual = float(actual) if actual not in (None, "") else None
-        ready = _ready_min(b, planned)
         dur = actual if actual is not None else _pred_dur(planned, b)
         overruns.append(dur - _pred_dur(planned, b))
-        started = to_min(b.get("service_start"))
-        proj_start = started if started is not None else max(cursor, ready)
+        started = to_min(b.get("service_start")) or to_min(b.get("check_in_time"))
+        if started is not None:
+            proj_start = started
+        else:
+            ready = _ready_min(b, planned)
+            if is_today and effective_now is not None and planned > effective_now:
+                proj_start = cursor
+            else:
+                proj_start = max(cursor, ready)
         proj_end = proj_start + dur
         last_applied_gap = _gap_after(proj_end)
         cursor = max(cursor, proj_end + last_applied_gap)
@@ -637,21 +643,27 @@ def live_schedule(doctor: Dict, bookings: Sequence[Dict],
 
     extra_w_fn = _adapt_w_fn(leftover_duration_fn or remaining_service_fn)
     extra_b_fn = leftover_buffer_fn or (lambda _t: suggested_buffer)
-    leftover_from = cursor
-    if effective_now is not None:
-        leftover_from = max(cursor, effective_now)
+    active_scheduled = in_service_items + checked_in_ordered + booked_items
+
+    # If all scheduled appointments are done (no active patient in queue) and shift is ongoing:
+    # Doctor is available from max(last_done_end, effective_now) until shift_end.
+    if not active_scheduled and is_today and effective_now is not None and not shift_ended:
+        last_done = max((item["proj_end_min"] for item in timeline), default=(s or 0.0))
+        leftover_from = max(s or 0.0, effective_now, last_done)
+    else:
+        leftover_from = cursor
+        if effective_now is not None:
+            leftover_from = max(cursor, effective_now)
+
     extra_open = generate_shift_slots(
         doctor.get("shift_start"), doctor.get("shift_end"),
         duration_fn=extra_w_fn, buffer_fn=extra_b_fn,
         from_min=leftover_from, occupied=[], origin="reclaimed")
 
-    # Projected finish represents when the active workload completes
-    active_scheduled = in_service_items + checked_in_ordered + booked_items
     sample_w = float(extra_w_fn(cursor) or w)
     sample_step = sample_w + float(extra_b_fn(cursor) or 0.0)
 
-    # Projected finish is end of last consult — strip only the gap actually
-    # appended after that consult (not a later-suggested buffer value).
+    # Projected finish represents when the active workload completes
     if shift_ended:
         if done_items:
             proj_finish_val = max((item["proj_end_min"] for item in timeline if item["status"] == "done"), default=(e or 0.0))
@@ -668,7 +680,9 @@ def live_schedule(doctor: Dict, bookings: Sequence[Dict],
         projected_finish_12h_str = to_hhmm_12h(proj_finish_val)
         finishing_early = slack >= sample_step
     elif done_items:
-        proj_finish_val = max((item["proj_end_min"] for item in timeline), default=(s or 0.0))
+        # All patients completed, doctor is free for remainder of shift
+        last_done_end = max((item["proj_end_min"] for item in timeline), default=(s or 0.0))
+        proj_finish_val = last_done_end
         slack = (e - proj_finish_val) if e is not None else 0.0
         projected_finish_str = to_hhmm(proj_finish_val)
         projected_finish_12h_str = to_hhmm_12h(proj_finish_val)
