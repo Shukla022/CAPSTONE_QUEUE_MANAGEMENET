@@ -30,7 +30,7 @@ def main():
         return
 
     today = date.today()
-    dates = [str(today + timedelta(days=d)) for d in range(1, DAYS_AHEAD + 1)]
+    dates = [str(today + timedelta(days=d)) for d in range(0, DAYS_AHEAD + 1)]
 
     dbp = service.db_path()
     published = 0
@@ -40,8 +40,8 @@ def main():
         did = doc["id"]
         for d in dates:
             already = store.get_doctor_duty(dbp, did, d)
-            if already and already.get("is_available"):
-                continue  # skip already-published
+            if already and already.get("is_available") and already.get("shift_start") and already.get("shift_end"):
+                continue  # skip already-published with valid shift hours
             store.publish_doctor_duty(
                 dbp,
                 doctor_id=did,

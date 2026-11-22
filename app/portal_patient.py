@@ -403,7 +403,7 @@ def _booking_tab(user):
         return
 
     doctor_names = [
-        f"{d['name']} — {d.get('shift_start', '09:00')} to {d.get('shift_end', '13:00')}"
+        f"{d['name']} — {d.get('shift_start', '09:00')} to {d.get('shift_end', '17:00')}"
         for d in doctors
     ]
 
@@ -438,18 +438,40 @@ def _booking_tab(user):
         slots = []
 
     if not slots:
+        shift_s = doctor.get("shift_start", "09:00")
+        shift_e = doctor.get("shift_end", "17:00")
+        now_m = service._now_min() if date_iso == date.today().isoformat() else None
+        existing_bookings = store.list_bookings(service.db_path(), doctor_id=doctor["id"], date=date_iso)
+        active_bookings = [b for b in existing_bookings if b.get("status") not in ("cancelled", "no_show")]
+
         if date_iso == date.today().isoformat():
-            st.warning(
-                f"No further slots remain for today's shift ({doctor.get('shift_start', '09:00')} – {doctor.get('shift_end', '13:00')}). "
-                "The shift has concluded or all capacity is occupied. Please select tomorrow or an upcoming date to view available ML-generated slots."
-            )
+            shift_end_m = scheduling.to_min(shift_e) or 1020
+            if now_m is not None and now_m >= shift_end_m:
+                st.warning(
+                    f"Today's shift for {doctor.get('name')} ended at {shift_e}. "
+                    "Please select tomorrow or an upcoming date to book an appointment."
+                )
+            elif active_bookings:
+                st.warning(
+                    f"All {len(active_bookings)} slots for today's shift ({shift_s} – {shift_e}) are currently booked by other patients. "
+                    "Please select tomorrow or another upcoming date."
+                )
+            else:
+                st.warning(
+                    f"No further slots remain within the remaining duty hours today ({shift_s} – {shift_e}). "
+                    "Please select tomorrow or an upcoming date to view available ML-generated slots."
+                )
         else:
-            st.warning(
-                "No ML-generated slots are currently available for this doctor/date."
-            )
-            st.caption(
-                "All calculated capacity for this shift may be occupied or outside the doctor's duty hours."
-            )
+            if active_bookings:
+                st.warning(
+                    f"All capacity ({len(active_bookings)} appointments) for this date ({shift_s} – {shift_e}) is fully booked. "
+                    "Please choose another date."
+                )
+            else:
+                st.warning(
+                    f"No ML-generated slots fit into the published shift ({shift_s} – {shift_e}). "
+                    "The shift hours may be too short for a full consultation."
+                )
         return
 
     def slot_label(slot):

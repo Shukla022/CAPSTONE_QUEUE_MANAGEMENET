@@ -257,12 +257,12 @@ def doctor_with_duty(doctor: Dict, date_iso: str) -> Dict:
     out = dict(doctor)
     duty = store.get_doctor_duty(db_path(), int(doctor["id"]), date_iso)
     if duty and duty.get("is_available"):
-        if duty.get("shift_start"):
-            out["shift_start"] = duty["shift_start"]
-        if duty.get("shift_end"):
-            out["shift_end"] = duty["shift_end"]
+        out["shift_start"] = duty.get("shift_start") or doctor.get("shift_start") or "09:00"
+        out["shift_end"] = duty.get("shift_end") or doctor.get("shift_end") or "17:00"
         out["duty_published"] = True
     else:
+        out["shift_start"] = doctor.get("shift_start") or "09:00"
+        out["shift_end"] = doctor.get("shift_end") or "17:00"
         out["duty_published"] = bool(duty and duty.get("is_available"))
     return out
 

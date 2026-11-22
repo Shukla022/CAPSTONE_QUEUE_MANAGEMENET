@@ -666,7 +666,8 @@ def list_available_doctors(db_path: str | Path, *,
     q = """
         SELECT 
             d.id, d.name, d.department,
-            da.shift_start, da.shift_end,
+            COALESCE(da.shift_start, d.shift_start, '09:00') AS shift_start,
+            COALESCE(da.shift_end, d.shift_end, '17:00') AS shift_end,
             d.slot_minutes, d.buffer_minutes, d.active, d.created_at
         FROM doctors d
         JOIN doctor_availability da 
