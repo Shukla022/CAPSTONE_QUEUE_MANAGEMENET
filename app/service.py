@@ -633,8 +633,9 @@ def _now_min() -> float:
 def available_slots(doctor: Dict, date_iso: str) -> List[Dict]:
     """Open slots packed from the service-time model inside published duty hours.
 
-    Early finishes free leftover duty time; ``live_schedule`` reclaim merges
-    those extra ML-sized slots into the bookable set automatically.
+    Slots are generated from the ML service duration model and dynamic crowd buffer.
+    Already-booked intervals and elapsed times (for today) are excluded.
+    Early finishes on the current day dynamically reclaim and open extra slots.
     """
     from datetime import date as _date
     if not has_service_model():
@@ -644,42 +645,59 @@ def available_slots(doctor: Dict, date_iso: str) -> List[Dict]:
     if not is_doctor_available(doctor["id"], date_iso):
         return []
     doctor = doctor_with_duty(doctor, date_iso)
-    bookings = store.list_bookings(db_path(), doctor_id=doctor["id"], date=date_iso)
     is_today = date_iso == _date.today().isoformat()
     now = _now_min() if is_today else None
     duration_fn, buffer_fn, _ = _slot_fns(doctor, date_iso)
     profile = dept_duration_profile(doctor.get("department"))
 
-    packed = scheduling.available_slots(
-        doctor, bookings, now_min=now if is_today else None,
-        is_today=is_today, duration_fn=duration_fn, buffer_fn=buffer_fn)
-
-    ls = scheduling.live_schedule(
-        doctor, bookings, now_min=now if is_today else None,
-        max_overbook_fraction=_buffer_cfg().get("max_overbook_fraction", 0.30),
-        remaining_service_fn=duration_fn,
-        leftover_duration_fn=duration_fn,
-        leftover_buffer_fn=buffer_fn,
-        predicted_wait=profile.get("mean_wait", 0.0))
-
-    extra = ls.get("extra_open_slots") or []
-    candidate_slots = scheduling.merge_reclaimed_slots(packed, extra, now_min=now)
+    # Generate the complete shift timetable according to ML model predictions
+    planned = preview_shift_plan(doctor, date_iso)
 
     valid_slots: List[Dict] = []
-    for s in sorted(candidate_slots, key=lambda x: x.get("start_min", 0)):
+    for s in planned:
         s_start = s.get("slot_start") or s.get("start")
         s_end = s.get("slot_end") or s.get("end")
         sm = scheduling.to_min(s_start)
         em = scheduling.to_min(s_end)
         if sm is None or em is None or em <= sm:
             continue
+        # For today's date, do not offer slots that have already started in the past
+        if is_today and now is not None and sm < now - 1.0:
+            continue
+        # Omit slots already booked
         if store.check_booking_conflict(db_path(), doctor["id"], date_iso, s_start, s_end):
             continue
-        if any(max(sm, o.get("start_min", 0)) < min(em, o.get("end_min", 0)) - 1e-6 for o in valid_slots):
-            continue
-        # Annotate the live dynamic buffer used for this open slot
         s.setdefault("buffer_minutes", buffer_fn(sm))
         valid_slots.append(s)
+
+    # Reclaimed slots from early finishes on the current day
+    bookings = store.list_bookings(db_path(), doctor_id=doctor["id"], date=date_iso)
+    if is_today and bookings:
+        ls = scheduling.live_schedule(
+            doctor, bookings, now_min=now,
+            max_overbook_fraction=_buffer_cfg().get("max_overbook_fraction", 0.30),
+            remaining_service_fn=duration_fn,
+            leftover_duration_fn=duration_fn,
+            leftover_buffer_fn=buffer_fn,
+            predicted_wait=profile.get("mean_wait", 0.0))
+        extra = ls.get("extra_open_slots") or []
+        for es in extra:
+            es_start = es.get("slot_start") or es.get("start")
+            es_end = es.get("slot_end") or es.get("end")
+            esm = scheduling.to_min(es_start)
+            eem = scheduling.to_min(es_end)
+            if esm is None or eem is None or eem <= esm:
+                continue
+            if now is not None and esm < now - 1.0:
+                continue
+            if store.check_booking_conflict(db_path(), doctor["id"], date_iso, es_start, es_end):
+                continue
+            if any(max(esm, scheduling.to_min(o.get("slot_start") or o.get("start"))) < min(eem, scheduling.to_min(o.get("slot_end") or o.get("end"))) - 1e-6 for o in valid_slots):
+                continue
+            es.setdefault("buffer_minutes", buffer_fn(esm))
+            valid_slots.append(es)
+
+    valid_slots.sort(key=lambda x: scheduling.to_min(x.get("slot_start") or x.get("start")) or 0)
     return valid_slots
 
 
