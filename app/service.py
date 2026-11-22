@@ -569,6 +569,12 @@ def list_doctor_availability(doctor_id: Optional[int] = None, available_date: Op
     return store.list_doctor_availability(db_path(), doctor_id=doctor_id, available_date=available_date)
 
 
+def list_doctor_published_dates(doctor_id: Optional[int] = None, department: Optional[str] = None, from_date: Optional[str] = None) -> List[Dict]:
+    """Return dates where doctor(s) have published on-duty shifts."""
+    seed_default_system()
+    return store.list_doctor_published_dates(db_path(), doctor_id=doctor_id, department=department, from_date=from_date)
+
+
 def list_available_doctors_for_date(department: Optional[str] = None, date_str: Optional[str] = None) -> List[Dict]:
     """Return doctors who are BOTH active and available on the specified date."""
     seed_default_system()
@@ -585,9 +591,11 @@ def doctor_departments() -> List[str]:
 
 
 def specialty_departments() -> List[str]:
-    """Catalog of specialties (dataset), falling back to the live roster."""
-    catalog = [d for d in (options().get("departments") or []) if d]
-    return catalog or doctor_departments() or ["General"]
+    """Catalog of specialties (dataset), combined with the live roster."""
+    catalog = set(d for d in (options().get("departments") or []) if d)
+    live_depts = set(doctor_departments() or [])
+    combined = sorted(catalog | live_depts)
+    return combined or ["General"]
 
 
 def _dept_service_minutes(dept: str) -> float:

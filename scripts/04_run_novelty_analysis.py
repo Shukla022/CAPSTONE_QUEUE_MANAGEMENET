@@ -40,14 +40,15 @@ def run_conformal_analysis(df: pd.DataFrame, cfg: dict) -> dict:
     print("  -> Computing Conformal Prediction bounds (alpha=0.10, 90% target coverage)...")
     results = {}
     models_dir = abspath(cfg.get("models", {}).get("dir", "models"))
-    for task in ["waiting_time", "service_time"]:
+    test_size = float(cfg.get("data", {}).get("test_size", 0.20))
+    for task in ["waiting_time", "service_time", "arrival_delay"]:
         try:
             bundle_path = models_dir / f"{task}.pkl"
             if not bundle_path.exists():
                 continue
             bundle = ModelBundle.load(bundle_path)
             X, y, rows = preprocess.get_task_frame(df, task)
-            mask = preprocess.temporal_split(rows, 0.2)
+            mask = preprocess.temporal_split(rows, test_size)
             
             # Use calibration split (first half of test) and test split (second half)
             test_indices = np.where(mask)[0]

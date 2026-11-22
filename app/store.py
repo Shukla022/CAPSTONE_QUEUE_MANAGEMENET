@@ -585,7 +585,7 @@ def is_doctor_available(db_path: str | Path, doctor_id: int, available_date: str
             "SELECT is_available FROM doctor_availability WHERE doctor_id = ? AND available_date = ?",
             [doctor_id, available_date],
         ).fetchone()
-        # Opt-in: slots exist only after the doctor publishes duty for that day.
+        # Strictly doctor-published: slots only exist if the doctor chose to publish duty for this date
         if r is None:
             return False
         return bool(r["is_available"])
@@ -626,20 +626,52 @@ def list_doctor_availability(db_path: str | Path, *,
         return [dict(r) for r in conn.execute(q, args).fetchall()]
 
 
+def list_doctor_published_dates(db_path: str | Path, *,
+                                doctor_id: Optional[int] = None,
+                                department: Optional[str] = None,
+                                from_date: Optional[str] = None) -> List[Dict]:
+    """Return upcoming dates where doctor(s) have published on-duty shifts."""
+    init_db(db_path)
+    q = """
+        SELECT 
+            da.available_date, da.doctor_id, da.shift_start, da.shift_end,
+            d.name AS doctor_name, d.department
+        FROM doctor_availability da
+        JOIN doctors d ON d.id = da.doctor_id
+        WHERE d.active = 1 AND da.is_available = 1
+    """
+    args: List = []
+    if doctor_id is not None:
+        q += " AND da.doctor_id = ?"
+        args.append(doctor_id)
+    if department:
+        q += " AND d.department = ?"
+        args.append(department)
+    if from_date:
+        q += " AND da.available_date >= ?"
+        args.append(from_date)
+    q += " ORDER BY da.available_date ASC, d.department, d.name"
+    with get_conn(db_path) as conn:
+        return [dict(r) for r in conn.execute(q, args).fetchall()]
+
+
 def list_available_doctors(db_path: str | Path, *,
                            department: Optional[str] = None,
                            available_date: Optional[str] = None) -> List[Dict]:
-    """Return doctors who are BOTH active and available on the specified date."""
+    """Return doctors who are BOTH active and have published duty on the specified date."""
     init_db(db_path)
     if not available_date:
         return list_doctors(db_path, department=department, active_only=True)
 
     q = """
-        SELECT d.*
+        SELECT 
+            d.id, d.name, d.department,
+            da.shift_start, da.shift_end,
+            d.slot_minutes, d.buffer_minutes, d.active, d.created_at
         FROM doctors d
-        JOIN doctor_availability da ON da.doctor_id = d.id
+        JOIN doctor_availability da 
+          ON da.doctor_id = d.id AND da.available_date = ?
         WHERE d.active = 1
-          AND da.available_date = ?
           AND da.is_available = 1
     """
     args = [available_date]

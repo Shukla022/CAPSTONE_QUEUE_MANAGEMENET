@@ -51,7 +51,7 @@ def load_api_key() -> Optional[str]:
 class GenAIExplainer:
     """Explains queue decisions in natural language, live or offline."""
 
-    model_name: str = "gemini-2.0-flash"
+    model_name: str = "gemini-3.8-flash"
     max_output_tokens: int = 400
     api_key: Optional[str] = None
     _client: object = None
@@ -67,7 +67,7 @@ class GenAIExplainer:
     def from_config(cls, cfg: dict | None = None) -> "GenAIExplainer":
         cfg = cfg or load_config()
         g = cfg.get("genai", {})
-        obj = cls(model_name=g.get("model", "gemini-2.0-flash"),
+        obj = cls(model_name=g.get("model", "gemini-3.8-flash"),
                   max_output_tokens=int(g.get("max_output_tokens", 400)))
         return obj
 
@@ -97,7 +97,8 @@ class GenAIExplainer:
             return
         # Newer official SDK
         try:  # pragma: no cover - optional dependency
-            from google import genai
+            import importlib
+            genai = importlib.import_module("google.genai")
             self._client = genai.Client(api_key=key)
             self._sdk = "google.genai"
             self._live = True
@@ -142,7 +143,7 @@ class GenAIExplainer:
             return grounded_fallback
 
         # Primary model followed by fallback alternatives
-        fallback_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+        fallback_models = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"]
         models_to_try = [self.model_name] + [m for m in fallback_models if m != self.model_name]
 
         last_exc = None
@@ -304,8 +305,8 @@ class GenAIExplainer:
 
     def explain_patient_copilot(self, question: str, context: Dict) -> str:
         """Patient-facing Queue Copilot: provides safe, warm, plain-language guidance.
-        Never reveals raw internal DB fields (patient_user_id, doctor_id, noshow_prob, etc.).
-        Directs booking inquiries to the Book Appointment tab.
+        Answers any question about appointments, queue status, available departments,
+        clinic hours, check-in procedures, or booking steps. Never reveals raw internal DB fields.
         """
         q = (question or "").strip()
         q_lower = q.lower()
@@ -327,64 +328,223 @@ class GenAIExplainer:
                 "estimated_turn": str(raw_appt.get("estimated_turn_display") or raw_appt.get("estimated_turn") or raw_appt.get("appointment_time_12h") or "—"),
             }
 
-        # 2. Check for booking requests
-        booking_keywords = ("book", "booking", "schedule", "reschedule", "appointment for",
-                            "new appointment", "reserve", "dermatology", "cardiology",
-                            "orthopedics", "general medicine", "gynecology", "ent", "dentistry", "ophthalmology")
-        is_booking_request = any(kw in q_lower for kw in booking_keywords)
+        # Available departments
+        default_depts = [
+            "Cardiology", "Dentistry", "Dermatology", "ENT",
+            "General Medicine", "Gynecology", "Ophthalmology", "Orthopedics"
+        ]
+        depts = context.get("available_departments") or default_depts
+        dept_str = ", ".join(sorted(depts))
 
-        if is_booking_request and not ("status" in q_lower or "queue" in q_lower or "when is" in q_lower or "wait" in q_lower):
-            booking_guidance = (
-                "To book an appointment (including for Dermatology or any clinic specialty), "
-                "please navigate to the '📅 Book Appointment' tab above. There you can select your "
-                "preferred department, doctor, date, and available time slot, and confirm your booking. "
-                "(Appointments cannot be directly booked through this chat interface.)"
-            )
-            if not self._live or self._client is None:
-                return booking_guidance
+        # Build fallback based on specific user intent
+        fallback = self._patient_fallback_answer(q, patient_name, safe_appt, depts)
 
-            prompt = (
-                "You are an empathetic, professional Patient Queue Copilot at a healthcare clinic. "
-                "The patient is asking about booking an appointment. Warmly instruct them to use the "
-                "'📅 Book Appointment' tab in the navigation above to select their department, doctor, "
-                "date, and time slot. Emphasize that appointments cannot be booked directly inside this chat. "
-                "Do NOT claim an appointment has been booked. Keep your reply concise (2-3 sentences).\n"
-                f"Patient Question: {q}\n"
-                f"Facts: {booking_guidance}"
-            )
-            return self._generate(prompt, booking_guidance)
-
-        # 3. Build safe facts summary for general/queue inquiries
-        if safe_appt:
-            fallback = (
-                f"Hello {patient_name}! Here is your current appointment information:\n"
-                f"• Doctor: {safe_appt['doctor_name']} ({safe_appt['department']})\n"
-                f"• Date & Time: {safe_appt['appointment_date']} at {safe_appt['appointment_time']}\n"
-                f"• Status: {safe_appt['status']}\n"
-                f"• Queue Position: {safe_appt['queue_position']}\n"
-                f"• Estimated Turn: {safe_appt['estimated_turn']}\n"
-                f"• Estimated Wait: {safe_appt['estimated_wait']}"
-            )
-        else:
-            fallback = (
-                f"Hello {patient_name}, you currently do not have an active appointment scheduled. "
-                f"If you would like to book a consultation, please navigate to the '📅 Book Appointment' tab above."
-            )
-
-        if not q:
-            return fallback
+        # Build comprehensive fact context for Gemini
+        facts = {
+            "patient_name": patient_name,
+            "has_active_appointment": bool(safe_appt),
+            "appointment": safe_appt if safe_appt else "No active appointment scheduled",
+            "available_departments": depts,
+            "clinic_shift_hours": "09:00 - 13:00 (Standard Morning Shift)",
+            "booking_instructions": "Patients can book consultations in the '📅 Book Appointment' tab by choosing department, doctor, date, and ML slot.",
+            "check_in_instructions": "Patients check in at the clinic or via the '🎫 Live Queue' tab to enter the live queue and get their turn.",
+        }
+        facts_blob = json.dumps(facts, default=str)
 
         prompt = (
-            "You are an empathetic, helpful hospital Patient Queue Copilot. Answer the patient's "
-            "question warmly, accurately, and concisely (2-4 sentences) using ONLY these safe facts:\n"
-            f"{fallback}\n"
+            "You are an empathetic, professional Patient Queue Copilot at a healthcare hospital. "
+            "Answer the patient's question warmly, accurately, and concisely (2-4 sentences) using the facts below.\n\n"
+            f"Hospital Facts:\n{facts_blob}\n\n"
             "Rules:\n"
-            "- If they ask to book an appointment, guide them to the '📅 Book Appointment' tab.\n"
-            "- Do not disclose internal database IDs, technical machine-learning terms, or no-show scores.\n"
-            "- Do not claim an appointment has been booked unless it appears in the facts above.\n"
+            "- If they say hello, hi, or greet you, greet them warmly by name and ask how you can help.\n"
+            "- If they ask what departments/specialties are available, list the available departments clearly.\n"
+            "- If they ask to book an appointment or ask about booking, guide them to the '📅 Book Appointment' tab.\n"
+            "- If they ask about their queue, wait time, or appointment, reference their appointment facts.\n"
+            "- If they have no appointment and ask about their wait/status, politely explain they don't have one yet and offer booking steps.\n"
+            "- Never disclose internal database IDs, technical machine-learning parameters, or no-show scores.\n"
             f"Patient Question: {q}"
         )
         return self._generate(prompt, fallback)
+
+    def _patient_fallback_answer(self, question: str, patient_name: str, safe_appt: Dict, depts: List[str]) -> str:
+        """Grounded fallback for patient copilot when offline."""
+        q = question.lower().strip()
+        dept_str = ", ".join(sorted(depts))
+
+        # Greeting check
+        if q in ("hi", "hello", "hey", "good morning", "good afternoon", "greetings") or q.startswith(("hi ", "hello ")):
+            return (
+                f"Hello {patient_name}! I am your Hospital Queue Copilot. How can I help you today? "
+                "You can ask about your queue status, available departments, clinic hours, or how to book an appointment."
+            )
+
+        # Department / specialty inquiry
+        if any(w in q for w in ["dept", "department", "specialt", "specialist", "available doctor"]):
+            return (
+                f"Our hospital offers the following specialty departments: {dept_str}. "
+                "You can view available doctors and ML-generated slots in the '📅 Book Appointment' tab."
+            )
+
+        # Check-in inquiry
+        if any(w in q for w in ["check in", "checkin", "how to check", "arrive"]):
+            return (
+                "To check in, navigate to the '🎫 Live Queue' tab above and click '✅ Check in at clinic'. "
+                "Once checked in, you will enter the doctor's live queue and receive your live queue number and wait time."
+            )
+
+        # Booking inquiry
+        if any(w in q for w in ["how to book", "how do i book", "schedule an appointment", "new booking", "book appointment", "make an appointment"]):
+            return (
+                "To book an appointment, click on the '📅 Book Appointment' tab above. "
+                "Select your desired department, on-duty doctor, date, and preferred time slot, then click 'Book Appointment'."
+            )
+
+        # Queue / wait / appointment status
+        if any(w in q for w in ["queue", "wait", "position", "turn", "when is", "my appointment", "status"]):
+            if safe_appt:
+                return (
+                    f"Hello {patient_name}! Your appointment with {safe_appt['doctor_name']} ({safe_appt['department']}) "
+                    f"is on {safe_appt['appointment_date']} at {safe_appt['appointment_time']}. "
+                    f"Status: {safe_appt['status']} | Queue Position: {safe_appt['queue_position']} | "
+                    f"Estimated Wait: {safe_appt['estimated_wait']}."
+                )
+            return (
+                f"Hello {patient_name}, you currently do not have an active appointment scheduled today. "
+                "If you would like to schedule a consultation, please visit the '📅 Book Appointment' tab above."
+            )
+
+        # General / default fallback
+        if safe_appt:
+            return (
+                f"Hello {patient_name}! Your appointment is confirmed with {safe_appt['doctor_name']} ({safe_appt['department']}) "
+                f"at {safe_appt['appointment_time']}. Status: {safe_appt['status']}. "
+                "Let me know if you need assistance with your queue or directions."
+            )
+        return (
+            f"Hello {patient_name}! I am your Hospital Queue Copilot. Our hospital features {len(depts)} departments ({dept_str}). "
+            "Please visit the '📅 Book Appointment' tab to schedule a consultation, or the '🎫 Live Queue' tab to track your visit."
+        )
+
+    def explain_clinical_copilot(self, question: str, context: Dict) -> str:
+        """Hospital AI Copilot — answers any operational question from live real-time data.
+
+        Works for both Admin context (hospital_summary, department_load, doctor_wise_load)
+        and Doctor context (doctor, summary, timeline). Never invents data.
+        """
+        q = (question or "").strip()
+        if not q:
+            return "Please ask a question about today's hospital operations."
+
+        # Detect context type
+        is_admin_context = "hospital_summary" in context or "department_load" in context
+        is_doctor_context = "doctor" in context or "timeline" in context
+
+        blob = json.dumps(context, default=str)
+        # Keep blob under 3000 chars for token budget
+        if len(blob) > 3000:
+            blob = blob[:3000] + "... [truncated]"
+
+        if is_admin_context:
+            fallback = self._admin_fallback_answer(q, context)
+            prompt = (
+                "You are the Hospital Administrative AI Copilot. You have access to live, real-time "
+                "hospital data for today. Answer the administrator's question accurately and concisely "
+                "(3-5 sentences) using ONLY the JSON facts below. Do not invent numbers, patient names, "
+                "or percentages not present in the facts. If the facts don't contain the answer, say so.\n\n"
+                f"Real-Time Hospital Data:\n{blob}\n\n"
+                f"Administrator Question: {q}"
+            )
+        elif is_doctor_context:
+            doc = context.get("doctor", {})
+            summary = context.get("summary", {})
+            timeline = context.get("timeline", [])
+            doc_name = doc.get("name", "Doctor") if isinstance(doc, dict) else "Doctor"
+            waiting_count = sum(1 for t in timeline if t.get("status") in ("checked_in", "in_service"))
+            done_count = sum(1 for t in timeline if t.get("status") == "done")
+            fallback = (
+                f"Dr. {doc_name}'s queue today: {len(timeline)} total patients, "
+                f"{waiting_count} waiting/in-service, {done_count} completed. "
+                f"Projected finish: {summary.get('projected_finish_12h') or summary.get('projected_finish', '—')}. "
+                f"Slack: {float(summary.get('slack_min') or 0.0):+.1f} min."
+            )
+            prompt = (
+                "You are a Clinical Queue AI Copilot for a doctor. Answer the doctor's question "
+                "accurately in 2-4 sentences using ONLY these facts. Do not invent patient names or times.\n\n"
+                f"Live Queue Data:\n{blob}\n\n"
+                f"Doctor Question: {q}"
+            )
+        else:
+            # Generic admin/staff context
+            fallback = f"Live hospital data: {blob[:500]}"
+            prompt = (
+                "You are the Hospital AI Copilot. Answer this staff question using ONLY "
+                "the following real-time facts. Do not invent numbers or names.\n\n"
+                f"Facts: {blob}\n\nQuestion: {q}"
+            )
+
+        result = self._generate(prompt, fallback if is_doctor_context else self._admin_fallback_answer(q, context))
+        return result or fallback
+
+    def _admin_fallback_answer(self, question: str, context: Dict) -> str:
+        """Build a plain-text answer from live admin context when Gemini is unavailable."""
+        q = question.lower()
+        s = context.get("hospital_summary", {})
+        dept_load = context.get("department_load", {})
+        doctor_load = context.get("doctor_wise_load", [])
+        today = context.get("today_date", "today")
+
+        if any(w in q for w in ["waiting", "wait", "queue", "checked in"]):
+            return (
+                f"Currently {s.get('checked_in_waiting', 0)} patient(s) are checked in and waiting, "
+                f"and {s.get('in_service_now', 0)} patient(s) are in active consultation. "
+                f"Total appointments today: {s.get('appointments_today', 0)}."
+            )
+        if any(w in q for w in ["doctor", "duty", "on duty", "available", "who is"]):
+            if doctor_load:
+                lines = [
+                    f"{d['name']} ({d['department']}): {d['total_patients']} patients, "
+                    f"{d['completed']} done, {d['remaining_booked']} remaining, shift {d['shift']}"
+                    for d in doctor_load
+                ]
+                return f"Doctors on duty today ({today}):\n" + "\n".join(f"• {l}" for l in lines)
+            return f"No doctors on duty yet for today ({today})."
+        if any(w in q for w in ["department", "dept", "busiest", "load", "which"]):
+            if dept_load:
+                sorted_depts = sorted(dept_load.items(), key=lambda x: x[1]["total"], reverse=True)
+                lines = [
+                    f"{dept}: {v['total']} total, {v['checked_in']} waiting, "
+                    f"{v['in_service']} in service, {v['done']} done"
+                    for dept, v in sorted_depts
+                ]
+                return "Department load today:\n" + "\n".join(f"• {l}" for l in lines)
+            return "No department data for today yet."
+        if any(w in q for w in ["no show", "no-show", "absent", "miss", "rate"]):
+            return (
+                f"No-shows today: {s.get('no_shows_today', 0)} out of "
+                f"{s.get('appointments_today', 0)} appointments "
+                f"(rate: {s.get('no_show_rate_today', '0%')})."
+            )
+        if any(w in q for w in ["complete", "done", "finish"]):
+            return (
+                f"Completed consultations today: {s.get('completed_today', 0)} out of "
+                f"{s.get('appointments_today', 0)} total appointments."
+            )
+        if any(w in q for w in ["patient", "register", "total"]):
+            return (
+                f"Total registered patients in the system: {s.get('total_registered_patients', 0)}. "
+                f"Appointments today: {s.get('appointments_today', 0)}."
+            )
+        # Summary / default
+        return (
+            f"Hospital Status — {today}:\n"
+            f"• Doctors on duty: {s.get('doctors_on_duty_today', 0)}\n"
+            f"• Total appointments: {s.get('appointments_today', 0)}\n"
+            f"• Checked in & waiting: {s.get('checked_in_waiting', 0)}\n"
+            f"• In consultation: {s.get('in_service_now', 0)}\n"
+            f"• Completed: {s.get('completed_today', 0)}\n"
+            f"• No-shows: {s.get('no_shows_today', 0)} ({s.get('no_show_rate_today', '0%')})\n"
+            f"• Registered patients: {s.get('total_registered_patients', 0)}"
+        )
 
     def explain_counterfactual(self, scenario: str, cf_data: Dict) -> str:
         """Explains a what-if counterfactual scenario (punctuality, emergency, or doctor staffing)."""

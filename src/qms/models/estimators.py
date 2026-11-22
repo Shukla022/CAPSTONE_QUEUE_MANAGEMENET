@@ -52,10 +52,10 @@ def make_regressor(seed: int = 42, *, loss: str = "squared_error", **kwargs):
 
 
 def arrival_regressor_params(seed: int = 42) -> dict:
-    """Shallower, more regularised trees: punctuality is noisy and overfits easily."""
+    """Robust L1/absolute-error regressor for punctuality, directly targeting MAE."""
     return dict(
-        n_estimators=180, max_depth=2, learning_rate=0.05,
-        subsample=0.80, min_samples_leaf=50, min_samples_split=100,
+        n_estimators=120, max_depth=3, learning_rate=0.04,
+        subsample=0.85, min_samples_leaf=40,
         random_state=seed,
     )
 

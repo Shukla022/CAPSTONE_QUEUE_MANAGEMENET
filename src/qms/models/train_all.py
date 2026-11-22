@@ -57,56 +57,40 @@ def _fit_one(task: str, df, cfg):
 
     if task == "no_show":
         kind = "classification"
-        sw_fit = estimators.balanced_sample_weights(y_fit)
         est = estimators.make_classifier(cfg["seed"])
-        try:
-            est.fit(X_fit, y_fit, sample_weight=sw_fit)
-        except TypeError:
-            est.fit(X_fit, y_fit)
+        est.fit(X_fit, y_fit)
         val_proba = est.predict_proba(X_val)[:, 1]
-        ns_cfg = cfg["models"]["no_show"]
-        thr = metrics.choose_threshold(
-            y_val, val_proba, min_recall=float(ns_cfg.get("min_recall", 0.25)))
-        # refit on all training rows with the chosen threshold
-        sw = estimators.balanced_sample_weights(ytr)
+        ns_cfg = cfg.get("models", {}).get("no_show", {})
+        min_rec = float(ns_cfg.get("min_recall", 0.20))
+        thr = metrics.choose_threshold(y_val, val_proba, min_recall=min_rec)
+        
+        # refit on full training set with unweighted honest probabilities
         est = estimators.make_classifier(cfg["seed"])
-        try:
-            est.fit(Xtr, ytr, sample_weight=sw)
-        except TypeError:
-            est.fit(Xtr, ytr)
+        est.fit(Xtr, ytr)
         proba = est.predict_proba(Xte)[:, 1]
         m = metrics.classification_metrics(yte, proba, threshold=thr)
         m["n_train"], m["n_test"] = int(len(ytr)), int(len(yte))
-        m["threshold_source"] = "validation_f1"
+        m["threshold_source"] = "validation_balanced"
         calib = metrics.calibration_table(yte, proba)
         extra = {"calibration": calib}
         preds_for_plot = proba
     else:
         kind = "regression"
         thr = 0.5
-        y_fit_use = y_fit
-        ytr_use = ytr
         if task == "arrival_delay":
-            lo, hi = np.quantile(y_fit, [0.02, 0.98])
-            y_fit_use = np.clip(y_fit, lo, hi)
-            ytr_use = np.clip(ytr, lo, hi)
-        loss = "huber" if task == "arrival_delay" else "squared_error"
-        extra_fit = (estimators.arrival_regressor_params(cfg["seed"])
-                     if task == "arrival_delay" else {})
-        extra_fit.pop("random_state", None)
-        est = estimators.make_regressor(cfg["seed"], loss=loss, **extra_fit)
-        try:
-            est.fit(X_fit, y_fit_use)
-        except TypeError:
-            est = estimators.make_regressor(cfg["seed"])
-            est.fit(X_fit, y_fit_use)
-        # refit on full train
-        est = estimators.make_regressor(cfg["seed"], loss=loss, **extra_fit)
-        try:
-            est.fit(Xtr, ytr_use)
-        except TypeError:
-            est = estimators.make_regressor(cfg["seed"])
-            est.fit(Xtr, ytr_use)
+            loss = "absolute_error"
+            extra_fit = estimators.arrival_regressor_params(cfg["seed"])
+            extra_fit.pop("random_state", None)
+            est = estimators.make_regressor(cfg["seed"], loss=loss, **extra_fit)
+            est.fit(X_fit, y_fit)
+            est = estimators.make_regressor(cfg["seed"], loss=loss, **extra_fit)
+            est.fit(Xtr, ytr)
+        else:
+            loss = "squared_error"
+            est = estimators.make_regressor(cfg["seed"], loss=loss)
+            est.fit(X_fit, y_fit)
+            est = estimators.make_regressor(cfg["seed"], loss=loss)
+            est.fit(Xtr, ytr)
         preds = est.predict(Xte)
         m = metrics.regression_metrics(yte, preds)
         m["n_train"], m["n_test"] = int(len(ytr)), int(len(yte))

@@ -44,56 +44,68 @@ def classification_metrics(y_true, scores, threshold: float = 0.5) -> Dict[str, 
     tp, tn, fp, fn = c["tp"], c["tn"], c["fp"], c["fn"]
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
     accuracy = (tp + tn) / max(tp + tn + fp + fn, 1)
+    balanced_acc = 0.5 * (recall + specificity)
+    youden_j = recall + specificity - 1.0
     base_rate = float(np.mean(np.asarray(y_true).astype(int)))
+    flag_rate = float(np.mean(y_pred))
     return {
         "auc": round(roc_auc(y_true, scores), 4),
         "f1": round(f1, 4),
         "precision": round(precision, 4),
         "recall": round(recall, 4),
+        "specificity": round(specificity, 4),
         "accuracy": round(accuracy, 4),
+        "balanced_accuracy": round(balanced_acc, 4),
+        "youden_j": round(youden_j, 4),
         "base_rate": round(base_rate, 4),
+        "flag_rate": round(flag_rate, 4),
         "threshold": threshold,
         **c,
     }
 
 
-def choose_threshold(y_true, scores, *, min_recall: float = 0.25,
+def choose_threshold(y_true, scores, *, min_recall: float = 0.20,
+                     min_specificity: float = 0.50,
                      beta: float = 1.0) -> float:
     """Pick a decision threshold on a validation slice (not the test set).
 
-    Maximises F-beta among thresholds whose recall is at least ``min_recall``.
-    Falls back to unconstrained F1 if none qualify.
+    Balances F-beta and specificity so that the model flags genuinely high-risk
+    patients without trivially labelling the entire clinic cohort as no-shows.
     """
     y_true = np.asarray(y_true).astype(int)
     scores = np.asarray(scores, dtype=float)
     candidates = np.unique(np.concatenate([
-        np.array([0.08, 0.10, 0.12, 0.15, 0.18, 0.20, 0.22, 0.25, 0.28, 0.30,
-                  0.35, 0.40, 0.45, 0.50]),
-        np.quantile(scores, np.linspace(0.05, 0.90, 18)),
+        np.array([0.15, 0.18, 0.20, 0.22, 0.25, 0.28, 0.30, 0.35, 0.40, 0.45, 0.50]),
+        np.quantile(scores, np.linspace(0.10, 0.90, 20)),
     ]))
-    candidates = np.clip(candidates, 0.05, 0.70)
+    candidates = np.clip(candidates, 0.15, 0.70)
 
     def _fbeta(prec, rec):
         b2 = beta * beta
         return (1 + b2) * prec * rec / (b2 * prec + rec + 1e-12)
 
-    def _search(require_recall: bool) -> tuple:
-        best_t, best_s = 0.25, -1.0
+    best_t, best_score = 0.25, -1.0
+    # Search for threshold satisfying both minimum recall and specificity
+    for t in candidates:
+        m = classification_metrics(y_true, scores, float(t))
+        if m["recall"] < min_recall or m["specificity"] < min_specificity:
+            continue
+        s = _fbeta(m["precision"], m["recall"]) + 0.5 * m["balanced_accuracy"]
+        if s > best_score:
+            best_score, best_t = s, float(t)
+
+    if best_score < 0:
+        # Fallback to Youden's J index (balanced accuracy maximum)
         for t in candidates:
             m = classification_metrics(y_true, scores, float(t))
-            if require_recall and m["recall"] < min_recall:
-                continue
-            s = _fbeta(m["precision"], m["recall"])
-            if s > best_s:
-                best_s, best_t = s, float(t)
-        return best_t, best_s
+            s = m["youden_j"]
+            if s > best_score:
+                best_score, best_t = s, float(t)
 
-    t, score = _search(True)
-    if score < 0:
-        t, _ = _search(False)
-    return round(float(t), 3)
+    return round(float(best_t), 3)
 
 
 def calibration_table(y_true, scores, n_bins: int = 10) -> list:
@@ -125,14 +137,25 @@ def regression_metrics(y_true, y_pred) -> Dict[str, float]:
     rmse = float(np.sqrt(np.mean(err ** 2)))
     ss_res = float(np.sum(err ** 2))
     ss_tot = float(np.sum((y_true - y_true.mean()) ** 2))
-    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
-    baseline = float(np.mean(np.abs(y_true - y_true.mean())))
-    skill = 1.0 - mae / baseline if baseline > 0 else 0.0
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+    # For MAE, the mathematically optimal constant predictor is the median:
+    baseline_median = float(np.mean(np.abs(y_true - np.median(y_true))))
+    baseline_mean = float(np.mean(np.abs(y_true - y_true.mean())))
+    
+    skill_vs_median = 1.0 - mae / baseline_median if baseline_median > 0 else 0.0
+    skill_vs_mean = 1.0 - mae / baseline_mean if baseline_mean > 0 else 0.0
+
     return {
         "mae": round(mae, 4),
         "rmse": round(rmse, 4),
         "r2": round(r2, 4),
         "mean_target": round(float(y_true.mean()), 4),
-        "mae_baseline": round(baseline, 4),
-        "mae_skill": round(skill, 4),
+        "median_target": round(float(np.median(y_true)), 4),
+        "mae_baseline": round(baseline_median, 4),           # Honest median baseline for MAE
+        "mae_baseline_median": round(baseline_median, 4),
+        "mae_baseline_mean": round(baseline_mean, 4),
+        "mae_skill": round(skill_vs_median, 4),              # Skill against optimal median constant
+        "mae_skill_vs_median": round(skill_vs_median, 4),
+        "mae_skill_vs_mean": round(skill_vs_mean, 4),
     }

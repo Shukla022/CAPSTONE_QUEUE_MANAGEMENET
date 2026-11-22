@@ -70,6 +70,23 @@ def _status_stepper(status):
 def _live_ticket(user):
     st.header("🎫 Live Queue Ticket")
 
+    # Real-time auto-refresh controls
+    from datetime import datetime
+    col_rt1, col_rt2, col_rt3 = st.columns([3, 2, 2])
+    with col_rt1:
+        st.caption(f"🔴 Live — updated at {datetime.now().strftime('%H:%M:%S')}")
+    with col_rt2:
+        if st.button("🔄 Refresh Queue", key="patient_refresh_btn"):
+            st.rerun()
+    with col_rt3:
+        auto_refresh = st.checkbox("Auto-refresh (30s)", value=False, key="patient_auto_refresh")
+
+    if auto_refresh:
+        import time
+        st.info("⏳ Auto-refresh is ON. Queue updates every 30 seconds.")
+        time.sleep(30)
+        st.rerun()
+
     user_bookings = service.list_patient_bookings(patient_user_id=user["id"])
     if not user_bookings:
         st.info("You do not currently have any booked appointments. Visit the **📅 Book Appointment** tab to schedule a consultation.")
@@ -369,9 +386,20 @@ def _booking_tab(user):
 
     if not doctors:
         st.warning(
-            "No doctor has published duty hours for this department/date yet. "
+            f"No doctor has published duty hours for {department} on {scheduling.format_date_human(date_iso)} yet. "
             "Slots open after the doctor sets their shift for the day."
         )
+        # Check if other dates have published duty for this department
+        try:
+            open_records = service.list_doctor_published_dates(
+                department=department, from_date=date.today().isoformat()
+            )
+            if open_records:
+                unique_dates = sorted({r["available_date"] for r in open_records})
+                date_list_str = ", ".join(scheduling.format_date_human(d) for d in unique_dates[:5])
+                st.info(f"💡 Open dates with published doctor duty in **{department}**: {date_list_str}")
+        except Exception:
+            pass
         return
 
     doctor_names = [
@@ -410,14 +438,18 @@ def _booking_tab(user):
         slots = []
 
     if not slots:
-        st.warning(
-            "No ML-generated slots are currently available for this doctor/date."
-        )
-
-        st.caption(
-            "This can happen when the service-time model is not trained "
-            "or all calculated capacity is occupied."
-        )
+        if date_iso == date.today().isoformat():
+            st.warning(
+                f"No further slots remain for today's shift ({doctor.get('shift_start', '09:00')} – {doctor.get('shift_end', '13:00')}). "
+                "The shift has concluded or all capacity is occupied. Please select tomorrow or an upcoming date to view available ML-generated slots."
+            )
+        else:
+            st.warning(
+                "No ML-generated slots are currently available for this doctor/date."
+            )
+            st.caption(
+                "All calculated capacity for this shift may be occupied or outside the doctor's duty hours."
+            )
         return
 
     def slot_label(slot):
@@ -541,7 +573,7 @@ def _booking_tab(user):
 
         try:
             booking = {
-                "patient_name": user["full_name"],
+                "patient_name": user.get("full_name") or user.get("username", "Patient"),
                 "patient_user_id": user["id"],
                 "department": department,
                 "doctor_id": doctor["id"],
@@ -661,23 +693,23 @@ def _copilot_tab(user):
     st.header("🤖 Patient AI / Queue Copilot")
 
     st.caption(
-        "Ask about your appointment, queue status, arrival timing, "
-        "or general clinic procedures."
+        "Ask anything about your appointment, queue position, waiting time, "
+        "how to check in, available departments, or general hospital procedures."
     )
 
-    ticket = service.get_patient_live_ticket(
-        patient_user_id=user["id"]
-    )
+    ticket = service.get_patient_live_ticket(patient_user_id=user["id"])
+    all_bookings = service.list_patient_bookings(patient_user_id=user["id"])
+    departments = service.specialty_departments()
 
     sanitized_appointment = None
     if ticket:
         sanitized_appointment = {
-            "status": ticket.get("status"),
+            "status": str(ticket.get("status", "booked")).replace("_", " ").title(),
             "appointment_date": ticket.get("appointment_date_human") or ticket.get("appointment_date"),
             "appointment_time": ticket.get("appointment_time_12h") or ticket.get("slot_start"),
             "doctor_name": ticket.get("doctor_name"),
             "department": ticket.get("doctor_department"),
-            "queue_position": ticket.get("queue_position"),
+            "queue_position": str(ticket.get("queue_position") or "Available after check-in"),
             "patients_ahead": ticket.get("patients_ahead", 0),
             "estimated_wait": ticket.get("live_eta_display") or ticket.get("live_eta_minutes"),
             "estimated_turn": ticket.get("estimated_turn"),
@@ -686,62 +718,67 @@ def _copilot_tab(user):
     context = {
         "patient_name": user.get("full_name", user.get("username")),
         "appointment": sanitized_appointment,
+        "total_appointments": len(all_bookings) if all_bookings else 0,
+        "available_departments": departments,
+        "hospital_info": {
+            "booking_note": "Appointments can be booked in the Book Appointment tab.",
+            "check_in_note": "Check in at reception or via the Live Queue tab.",
+            "departments": departments,
+        },
     }
 
     if "patient_chat" not in st.session_state:
         st.session_state["patient_chat"] = []
 
+    c_hist, c_clear = st.columns([5, 1])
+    with c_clear:
+        if st.button("🗑️ Clear Chat", key="pt_clear_chat"):
+            st.session_state["patient_chat"] = []
+            st.rerun()
+
+    clicked_question = None
+    with st.expander("💡 You can ask...", expanded=False):
+        suggestions = [
+            "What departments are available?",
+            "What is my current queue position?",
+            "How long do I have to wait?",
+            "When is my appointment?",
+            "How do I check in?",
+            "How do I book a new appointment?",
+            "What is my appointment status?",
+        ]
+        for s in suggestions:
+            if st.button(s, key=f"pt_sugg_{s[:25]}"):
+                clicked_question = s
+
     for message in st.session_state["patient_chat"]:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-    question = st.chat_input(
-        "Ask your Queue Copilot..."
-    )
+    typed_question = st.chat_input("Ask your Queue Copilot...")
+    question = typed_question or clicked_question
 
-    if not question:
-        return
+    if question:
+        st.session_state["patient_chat"].append({"role": "user", "content": question})
 
-    st.session_state["patient_chat"].append(
-        {
-            "role": "user",
-            "content": question,
-        }
-    )
-
-    answer = None
-
-    try:
-        explainer = service.explainer()
-
-        if hasattr(explainer, "explain_patient_copilot"):
-            answer = explainer.explain_patient_copilot(
-                question,
-                context,
-            )
-        elif hasattr(explainer, "answer"):
-            answer = explainer.answer(
-                question,
-                context,
-            )
-    except Exception:
         answer = None
+        try:
+            explainer = service.explainer()
+            if hasattr(explainer, "explain_patient_copilot"):
+                answer = explainer.explain_patient_copilot(question, context)
+            elif hasattr(explainer, "answer"):
+                answer = explainer.answer(question, context)
+        except Exception:
+            answer = None
 
-    if not answer:
-        answer = (
-            "I can help with your queue and appointment information. "
-            "For medical diagnosis or treatment decisions, please consult "
-            "a qualified healthcare professional."
-        )
+        if not answer:
+            answer = (
+                "I can help with your appointment and queue information. "
+                "For medical diagnosis or treatment, please consult a healthcare professional."
+            )
 
-    st.session_state["patient_chat"].append(
-        {
-            "role": "assistant",
-            "content": answer,
-        }
-    )
-
-    st.rerun()
+        st.session_state["patient_chat"].append({"role": "assistant", "content": answer})
+        st.rerun()
 
 
 def render_patient_portal(user):

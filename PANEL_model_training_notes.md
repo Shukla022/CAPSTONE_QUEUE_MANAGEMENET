@@ -49,44 +49,38 @@ train → compute test metrics → save a `ModelBundle` `.pkl` → make plots �
 ### 1. No-show — classification (`GradientBoostingClassifier`)
 - **Predicts:** probability a booked patient won't show. **Booking-time features only.**
 - **Feeds:** the no-show-aware overbooking buffer.
-- **Numbers:** AUC **0.596**, recall **99.62%**, precision **21.1%**, accuracy **25.6%**,
-  threshold **0.15** (base no-show rate 19.9%).
-- **Say:** "We optimise for **recall**, not accuracy — catching a no-show lets us
-  reclaim the slot, while a false alarm only costs a small buffer. The model is
-  **well-calibrated**, and it's the calibrated probability the buffer consumes."
+- **Numbers:** AUC **0.589**, recall **49.12%**, specificity **62.67%**, precision **24.64%**, accuracy **60.0%** on synthetic holdout, and **63.5% accuracy** on the real hospital test set (threshold **0.197**, base rate ~20%).
+- **Say:** "We train unweighted to maintain true, well-calibrated posterior probabilities. The decision threshold (0.197) is optimized via Youden's J statistic on a validation slice, achieving balanced sensitivity and 74.1% specificity on real hospital data. The continuous probability directly scales the chance-constrained overbooking buffer."
 
 ### 2. Service time — regression (`GradientBoostingRegressor`) ⭐ strongest
 - **Predicts:** consult duration from department, weekday, time-of-day. Planning-time features only.
 - **Feeds:** slot-width sizing in the scheduler (the key ML input for scheduling).
-- **Numbers:** R² **0.834**, MAE **2.10 min**, **+66.2% skill** over the mean baseline.
-- **Say:** "This is our best model. Department is the dominant driver, which is
-  clinically sensible — a cardiology consult isn't a general-medicine consult."
+- **Numbers:** R² **0.832**, MAE **2.12 min**, **+64.4% skill** over median baseline (+65.8% over mean baseline). Transferred zero-shot to real hospital data with MAE **3.95 min**.
+- **Say:** "This is our flagship predictive model. Clinical department is the dominant driver (Cardiology consults average ~33 min vs General Medicine ~11.7 min). It generalizes to real hospital consults within an MAE under 4 minutes."
 
 ### 3. Waiting time — regression
 - **Predicts:** real-time wait, produced **at check-in** — so it may use
   `queue_length_at_arrival` (only known once the patient is present).
-- **Feeds:** the live estimate shown to patients/staff.
-- **Numbers:** R² **0.134**, MAE **8.67 min**, **+6.4% skill** over a dept-average baseline.
-- **Say:** "Modest but real skill. Top driver is queue-per-doctor."
+- **Feeds:** the live estimate shown to patients/staff and conformal uncertainty bounds.
+- **Numbers:** R² **0.207**, MAE **8.38 min**, **+4.7% skill** over median baseline (+9.5% over mean baseline).
+- **Say:** "Real-time check-in model. Dominant feature is queue-per-doctor. Calibrated conformal prediction guarantees 95.89% empirical coverage on real hospital patients under a 90% confidence target."
 
-### 4. Arrival delay — regression (deliberately regularised)
+### 4. Arrival delay — regression (L1/MAE optimized)
 - **Predicts:** how early/late a patient arrives. Trained on shown patients only.
 - **Feeds:** buffer window / sequencing.
-- **Numbers:** MAE **8.47 min**, R² **≈ 0** (at baseline).
-- **Say:** "Punctuality is close to random here, so we regularise hard —
-  depth-2 trees, Huber loss, winsorised tails (`arrival_regressor_params`) — to
-  avoid overfitting noise. Sitting at baseline is an honest finding, not a bug."
+- **Numbers:** MAE **8.23 min** on synthetic holdout (matching the optimal median baseline of 8.22 min); MAE **13.05 min** on real hospital data.
+- **Say:** "Patient punctuality is inherently high-entropy human behavior. We train directly under L1 loss (MAE) with regularized gradient boosting to avoid overfitting noise. We transparently report both median and mean baselines, matching optimal constant baseline without hallucinating false correlations."
 
 ---
 
 ## Cheat-sheet table (memorise this)
 
-| Model | Type | Headline metric | Baseline | Skill | Drives |
+| Model | Type | Headline metric | Baseline (Median / Mean) | Real Hospital Transfer | Drives |
 |---|---|---|---|---|---|
-| No-show | Classifier | Recall **99.62%** (AUC 0.596) @ thr 0.15 | 19.9% base rate | — | Overbooking buffer |
-| Service time | Regressor | **R² 0.834**, MAE 2.10 min | MAE 6.19 | **+66.2%** | Slot-width sizing |
-| Waiting time | Regressor | R² 0.134, MAE 8.67 min | MAE 9.26 | +6.4% | Live check-in estimate |
-| Arrival delay | Regressor | MAE 8.47 min, R² ≈ 0 | MAE 8.41 | ~0% | Buffer / sequencing |
+| No-show | Classifier | **AUC 0.589**, Acc **60.0%**, Rec 49.1% | 19.9% base rate | **63.5% Acc**, 74.1% Spec | Dynamic Overbooking Buffer |
+| Service time | Regressor | **R² 0.832**, MAE **2.12 min** | 5.94 min / 6.19 min | **MAE 3.95 min** | Slot-width sizing |
+| Waiting time | Regressor | **R² 0.207**, MAE **8.38 min** | 8.79 min / 9.26 min | **MAE 8.61 min** (95.9% Conformal) | Live check-in estimate |
+| Arrival delay | Regressor | MAE **8.23 min** | 8.22 min / 8.41 min | **MAE 13.05 min** | Buffer window / sequencing |
 
 ---
 
@@ -122,16 +116,11 @@ maximise F-β subject to a minimum recall. That's why it's 0.15, not a naive 0.5
 
 ## Likely questions + crisp answers
 
-**Q: 25% accuracy is bad, isn't it?**
-A: Accuracy is the wrong metric for a rare event with asymmetric costs. "Predict
-everyone shows" scores 80% accuracy but catches zero no-shows. We tune for recall,
-catch 99.6% of no-shows, and the calibrated probability — not the hard label — is what
-the buffer uses. AUC 0.60 measures ranking ability.
+**Q: How is the No-Show model tuned and evaluated?**
+A: Rather than artificially distorting class weights or picking an extreme low threshold (which previously flagged 95% of patients and yielded 25% accuracy), we train on honest posterior probabilities and optimize the decision threshold via Youden's J statistic / balanced accuracy on a held-out temporal validation slice. This achieves 60.0% accuracy on synthetic test and 63.5% accuracy on real-world hospital appointments (with 74.1% specificity and balanced recall), while the continuous calibrated probability feeds the dynamic overbooking buffer.
 
-**Q: Why is arrival-delay R² about zero?**
-A: Because patient punctuality is nearly random in this dataset. Rather than fake
-skill by overfitting, we regularise heavily and report it honestly. It still supplies
-a reasonable average for the buffer window.
+**Q: Why is arrival-delay R² near zero, and how is it evaluated?**
+A: Patient punctuality in both synthetic and empirical hospital data is high-entropy human behavior with heavy tails (standard deviation ~14-15 min). Instead of overfitting noise with complex non-linear trees (which previously scored worse than baseline under Huber loss), we train with L1 loss (MAE) to directly target the median. We transparently report both the mathematically optimal median baseline (8.22 min) and the mean baseline (8.41 min). Our model achieves 8.23 min MAE on synthetic test and 13.05 min MAE on real hospital test, avoiding hallucinated signals.
 
 **Q: Did you avoid data leakage?**
 A: Yes — temporal split plus per-task feature gating by information-availability time,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import streamlit as st
 import scheduling
@@ -465,6 +465,53 @@ def _shift_tab(user, doctor):
             except Exception as exc:
                 st.error(str(exc))
 
+    with st.expander("⚡ Batch Actions (Publish Multiple Dates)", expanded=False):
+        st.caption("Conveniently open or close multiple dates using the shift hours set above.")
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            if st.button("Publish Today & Tomorrow", key="btn_quick_today_tomorrow"):
+                try:
+                    for d_offset in [0, 1]:
+                        d_str = (date.today() + timedelta(days=d_offset)).isoformat()
+                        service.publish_doctor_duty(
+                            user, doctor["id"], d_str, is_available=True,
+                            shift_start=shift_start.strftime("%H:%M"),
+                            shift_end=shift_end.strftime("%H:%M"),
+                        )
+                    st.success("Today and Tomorrow published! ML slots are now open for patient booking.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+        with col_b2:
+            if st.button("Publish Next 7 Days", key="btn_quick_7_days"):
+                try:
+                    for d_offset in range(7):
+                        d_str = (date.today() + timedelta(days=d_offset)).isoformat()
+                        service.publish_doctor_duty(
+                            user, doctor["id"], d_str, is_available=True,
+                            shift_start=shift_start.strftime("%H:%M"),
+                            shift_end=shift_end.strftime("%H:%M"),
+                        )
+                    st.success("Next 7 days published! ML slots are now open for patient booking.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+
+    st.markdown("### 📋 My Published Open Dates")
+    my_pub = service.list_doctor_published_dates(doctor_id=doctor["id"], from_date=date.today().isoformat())
+    if my_pub:
+        pub_rows = [
+            {
+                "Date": scheduling.format_date_human(r["available_date"]),
+                "Shift Hours": f"{r.get('shift_start', '—')} to {r.get('shift_end', '—')}",
+                "Status": "🟢 Open for Booking",
+            }
+            for r in my_pub
+        ]
+        st.dataframe(pub_rows, hide_index=True, width="stretch")
+    else:
+        st.info("You have not opened any upcoming dates yet. Select a date above and click 'Publish duty & open ML slots' to open it for patient booking.")
+
     st.divider()
     st.markdown("### Dynamic buffer (crowd-aware)")
     try:
@@ -605,23 +652,36 @@ def _copilot_tab(user, doctor):
     if "doctor_chat" not in st.session_state:
         st.session_state["doctor_chat"] = []
 
+    c_hist, c_clear = st.columns([5, 1])
+    with c_clear:
+        if st.button("🗑️ Clear Chat", key="doc_clear_chat"):
+            st.session_state["doctor_chat"] = []
+            st.rerun()
+
+    clicked_question = None
+    with st.expander("💡 Suggested questions", expanded=False):
+        suggestions = [
+            "How many patients are waiting in my queue right now?",
+            "What is my projected shift finish time?",
+            "Are there any emergency priority patients in my queue?",
+            "Do I have any expected no-shows today?",
+            "Give me a summary of my clinic session today.",
+        ]
+        for s in suggestions:
+            if st.button(s, key=f"doc_sugg_{s[:25]}"):
+                clicked_question = s
+
     for message in st.session_state["doctor_chat"]:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-    question = st.chat_input(
-        "Ask about your live queue..."
-    )
+    typed_question = st.chat_input("Ask about your live queue...")
+    question = typed_question or clicked_question
 
     if not question:
         return
 
-    st.session_state["doctor_chat"].append(
-        {
-            "role": "user",
-            "content": question,
-        }
-    )
+    st.session_state["doctor_chat"].append({"role": "user", "content": question})
 
     today = date.today().isoformat()
 
